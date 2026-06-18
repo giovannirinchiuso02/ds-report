@@ -2,28 +2,30 @@
 \usepackage[utf8]{inputenc}
 \usepackage{hyperref}
 \usepackage{url}
-\usepackage{natbib}
+\usepackage[numbers]{natbib}
 \usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, fit, backgrounds, shapes.geometric, shapes.multipart}
 \usepackage{cleveref} % this must be the last package to be loaded
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10}
+}
 
 \newcommand{\emailaddr}[1]{\href{mailto:#1}{\texttt{#1}}}
 
-\title{\LARGE
-    Final Report Template\\
-    (replace with your project name)
-}
-\subtitle{Final Report for the Distributed Systems Course [Your academic year here]}
-
-% Consider watching:
-% https://www.youtube.com/watch?v=ihxSUsJB_14
-% https://www.youtube.com/watch?v=XTFWaV55uDo
+\title{\LARGE Distributed Bomberman}
+\subtitle{Final Report for the Distributed Systems Course -- A.Y. 2024/25}
 
 \author{
-    Author 1 \\ \emailaddr{author1@email.it}
+    Giovanni Rinchiuso \\ \emailaddr{giovanni.rinchiuso@studio.unibo.it}
     \and
-    Author 2 \\ \emailaddr{author2@gmail.com}
-    \and
-    Author 3 \\ \emailaddr{author3@unibo.it}
+    Gioele Santi \\ \emailaddr{gioele.santi2@studio.unibo.it}
 }
 
 \date{\today}
@@ -33,556 +35,1082 @@
 \maketitle
 
 \begin{abstract}
-    Up to $\sim$2000 characters briefly describing the project.
+Distributed Bomberman is a real-time, fault-tolerant, multiplayer game inspired by the classic Bomberman arcade title, developed as a project for the Distributed Systems course at the University of Bologna (A.Y.\ 2024/25). Up to four players compete simultaneously on a shared grid, placing bombs to eliminate opponents. An unlimited number of spectators can observe the match and may request to join as a player when a slot becomes available. The system is built on an authoritative client-server architecture fronted by a session-aware TCP proxy, which hides a primary/backup server pair from clients. State is continuously replicated from the primary to the backup; on primary failure, the backup promotes itself automatically, re-binds the game port, and client sessions are restored transparently by the proxy. The entire system is implemented in Python~3 using the standard library for networking and Pygame for the graphical client.
 \end{abstract}
 
-\section*{Disclaimer (if needed)}
+% -----------------------------------------------------------------------
+\section{Concept}\label{concept}
+% -----------------------------------------------------------------------
 
-During the preparation of this work, the author(s) used [NAME TOOL / SERVICE] to [REASON].
+Distributed Bomberman is a system consisting of three cooperating processes: a game server, a transparent TCP proxy, and a Pygame graphical client.
 
-After using this tool/service, 
-the author(s) reviewed and edited the content as needed 
-and take(s) full responsibility for the content of the final report/artifact.
+\paragraph{Use cases.}
+The main actors are the \textbf{Player}, the \textbf{Spectator}, and the \textbf{Host} (the first player to join, a special role assigned automatically).
+Table~\ref{tab:usecases} summarises the principal use cases.
 
-\section*{Quick \LaTeX{} suggestions}
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llp{6.5cm}}
+\hline
+\textbf{Use case} & \textbf{Actor} & \textbf{Description} \\
+\hline
+Join lobby & Player / Spectator & Connect, receive assigned name, enter lobby or spectator queue \\
+Start game & Host & Press ``Start Game'' when $\geq 2$ players are connected \\
+Move & Player & Send directional command; server updates position \\
+Place bomb & Player & Place bomb at current tile; server handles detonation \\
+Send chat & Player / Spectator & Broadcast a text message to all participants \\
+Join as player & Spectator & Press J in the lobby; server converts spectator if a slot is free \\
+Observe match & Spectator & Receive live state snapshots; no game interaction \\
+\hline
+\end{tabular}
+\caption{Use cases of Distributed Bomberman.}
+\label{tab:usecases}
+\end{table}
 
-If you need to cite a reference, you can use the \texttt{cite} command, 
-like providing the BibTex key of some entry in the \texttt{references.bib} file, 
-e.g.: \cite{adams1995hitchhiker}.
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth,
+  uc/.style  = {ellipse, draw, align=center, font=\small,
+                minimum width=3.8cm, minimum height=0.75cm, fill=gray!6},
+  act/.style = {font=\small\bfseries, align=center}
+]
+%% System boundary
+\draw[rounded corners=6pt, dashed] (2.5,-0.5) rectangle (8.2,-7.6);
+\node[font=\bfseries\small, above] at (5.35,-0.5) {Distributed Bomberman};
 
-You can find pre-coocked BibTex entries for most Computer Science papers on \href{https://dblp.uni-trier.de/}{DBLP}.
+%% --- Actors ---
+\node[act] (player)    at (-0.5,-2.0)  {Player};
+\node[act] (spectator) at (-0.5,-5.8)  {Spectator};
+\node[act] (host)      at (11.2,-2.0)  {Host};
 
-If you need to include an image,
-let \LaTeX{} decide where to put it by using the \texttt{figure} environment,
-with a \texttt{includegraphics} command inside it.
-%
-If your need to reference a figure,
-use the \texttt{label} command to assign a label to the figure,
-and then use the \texttt{cref} command to reference it.
-%
-Put figures in the \texttt{figures} folder.
-%
-A complete example is shown in \cref{fig:universe}.
+%% --- Use cases (single column, even spacing) ---
+\node[uc] (join)    at (5.35,-1.2) {Join lobby};
+\node[uc] (start)   at (5.35,-2.4) {Start game};
+\node[uc] (move)    at (5.35,-3.6) {Move \& place bomb};
+\node[uc] (chat)    at (5.35,-4.8) {Send chat};
+\node[uc] (observe) at (5.35,-6.0) {Observe match};
+\node[uc] (joinp)   at (5.35,-7.2) {Join as player};
 
-\begin{figure}
-    \centering
-    \includegraphics[width=0.5\textwidth]{figures/universe.jpg}
-    \caption{This is an example image}
-    \label{fig:universe}
+%% --- Player connections ---
+\draw (player) -- (join.west);
+\draw (player) -- (move.west);
+\draw (player) -- (chat.west);
+
+%% --- Spectator connections ---
+\draw (spectator) -- (chat.west);
+\draw (spectator) -- (observe.west);
+\draw (spectator) -- (joinp.west);
+
+%% --- Host connections ---
+\draw (host) -- (join.east);
+\draw (host) -- (start.east);
+\end{tikzpicture}
+\caption{Use case diagram of Distributed Bomberman.}
+\label{fig:usecases}
 \end{figure}
 
-Do \textbf{not} put any placement constraint on figures,
-such as \texttt{[h]} or \texttt{[h!]}.
-%
-Same considerations apply for other floating elements 
-(e.g. tables, algorithms, listings, etc.).
+Players launch a client on their own machine; the client connects automatically to the proxy at a preconfigured address (default: \texttt{localhost:5555}) and is assigned a random name and a slot in the lobby.
+Once at least two players have joined, any player (the ``host'') can start the match.
+Players move on a 2D grid, place bombs, and try to eliminate opponents; a player that runs out of lives is eliminated.
+Spectators can join at any time and watch the match; while in the lobby, a spectator can request to become a player by pressing J, and is promoted if a slot is available.
+The game ends when only one player remains alive (or all die simultaneously, resulting in a draw).
+After a brief countdown, all players are returned to the lobby for a rematch.
 
-Do \textbf{not} use the \texttt{\textbackslash\textbackslash} or \texttt{\textbackslash newline} commands to break lines.
-
-Just leave an empty line between two paragraphs to start a new one.
-%
-The new line will be automatically indented.
-%
-This is intended: it is the \LaTeX{} way to separate capoverses.
-
-\section{Concept}\label{concept}
-
-Here you should explain:
-
+\paragraph{Why distribution?}
+Distribution is the core design driver:
 \begin{itemize}
-  \item The type of product developed with that project, for example (non-exhaustive):
-  %
-  \begin{itemize}
-    \item Application (with GUI, be it mobile, web, or desktop)
-    \item Command-line application (CLI could be used by humans or scripts)
-    \item Library
-    \item Web-service(s)
-  \end{itemize}
-
-  \item Use case description:
-  %
-  \begin{itemize}
-    \item \emph{what} is the software doing?
-    \item \emph{where} are the users?
-    \item \emph{when} and \emph{how frequently} do they interact with the system?
-    \item \emph{how} do they \emph{interact} with the system? which \emph{devices} are they using?
-    \item does the system need to \emph{store} user's \textbf{data}? \emph{which}? \emph{where}?
-    \item most likely, there will be \emph{multiple} \textbf{roles}
-  \end{itemize}
-
-  \item Why is distribution needed?
-  %
-  \begin{itemize}
-    \item geographically distributed environments?
-    \item computation speedup?
-    \item resource sharing?
-    \item fault tolerance?
-    \item other reasons?
-  \end{itemize}
-  %
-  In any case, please elaborate.
+    \item \textbf{Multi-player real-time gameplay} requires clients on different machines to share a consistent, up-to-date view of the game state.
+    \item \textbf{Authoritative server} centralises game logic, preventing clients from cheating and ensuring consistency.
+    \item \textbf{Fault tolerance} ensures that the match continues uninterrupted even if the primary server crashes: a hot standby backup takes over transparently.
 \end{itemize}
 
+% -----------------------------------------------------------------------
 \section{Requirements Elicitation and Analysis}\label{requirements}
+% -----------------------------------------------------------------------
 
-\begin{itemize}
-  \item The requirements must explain \textbf{what} (not how) the software
-  being produced should do.
-  %
-  \begin{itemize}
-    \item you should not focus on the particular problems, but exclusively on
-    what you want the application to do.
-  \end{itemize}
+\subsection{Functional Requirements}
 
-  \item Requirements must be clearly identified, and possibly numbered
+\begin{enumerate}
+    \item[\textbf{F1}] Up to four players shall be able to join a shared lobby and play simultaneously on the same map.
+    \item[\textbf{F2}] An unlimited number of spectators shall be able to join and observe the match in real time.
+    \item[\textbf{F3}] While in the lobby, spectators shall be able to request to join as a player by pressing a dedicated key; the request is accepted if a player slot is currently available.
+    \item[\textbf{F4}] The first player to join shall become the host and shall be able to start the game.
+    \item[\textbf{F5}] Players shall be able to move on the grid and place bombs; bombs shall explode after a timer, destroying breakable blocks and damaging players in range.
+    \item[\textbf{F6}] A player who disconnects during a match shall be marked as disconnected and removed from the active game; their session can be restored transparently by the proxy in the event of a server failover.
+    \item[\textbf{F7}] Players shall be able to send chat messages visible to all participants.
+    \item[\textbf{F8}] The system shall declare a winner (or a draw) and return all players to the lobby automatically.
+\end{enumerate}
 
-  \item Requirements are divided into:
-  %
-  \begin{itemize}
-    \item \textbf{Functional}: some functionality the software should provide to the user
+\subsection{Non-Functional Requirements}
 
-    \item \textbf{Non-functional}: requirements that do not directly concern behavioural aspects, such as consistency, availability, etc.
+\begin{enumerate}
+    \item[\textbf{NF1}] \textbf{Fault tolerance}: the system shall continue operating if the primary server crashes; clients shall not need to manually reconnect.
+    \item[\textbf{NF2}] \textbf{Consistency}: all clients shall observe the same game state; the server is the single source of truth.
+    \item[\textbf{NF3}] \textbf{Latency}: the game loop shall tick every 100\,ms; the state broadcast interval shall not exceed 100\,ms.
+    \item[\textbf{NF4}] \textbf{Transparency}: clients shall be unaware of the primary/backup topology; failover shall be invisible from the client's perspective.
+    \item[\textbf{NF5}] \textbf{Failover reconnect}: after a server failover, the proxy shall transparently restore all active client sessions to the new primary without requiring manual reconnection.
+\end{enumerate}
 
-    \item \textbf{Implementation}: constrain the entire phase of system realization, 
-    for instance by requiring the use of a specific programming language and/or a specific software tool
-    %
-    \begin{itemize}
-      \item these constraints should be adequately justified by political / economic / administrative reasons\ldots{}
-      \item \ldots{} otherwise, implementation choices should emerge \emph{as  a consequence of} design
-    \end{itemize}
-  \end{itemize}
 
-  \item If there are domain-specific terms, these should be explained in a glossary
-  
-  \item Each requirement must have its own \textbf{acceptance criterion}
-  %
-  \begin{itemize}
-    \item these will be important for the validation phase
-  \end{itemize}
-\end{itemize}
+\subsection{Relevant Distributed System Features}\label{ds-features}
 
-\subsection{Relevant Distributed System Features}
-\label{ds-features}
+\paragraph{Fault tolerance and dependability.}
+The primary availability concern is that a server crash should not abort the ongoing match.
+The system addresses this with a passive backup that receives state snapshots from the primary every 100\,ms and monitors it via heartbeat probes.
+On failure detection (1.5\,s timeout), the backup promotes itself and rebinds the game port; the proxy then reconnects automatically.
+The mechanism is straightforward and sufficient for the two-node, single-failure-domain scenario targeted by this project.
 
-Motivate which distributed system features are relevant for your project, and which are not.
-%
-\begin{itemize}
-  \item transparency
-  \begin{itemize}
-    \item does your system need to hide distribution details from users or developers?
-    \item is it important that failures, location, or replication are invisible?
-  \end{itemize}
+\paragraph{Transparency.}
+Clients connect to a fixed proxy address and are unaware of the primary/backup topology (location and replication transparency).
+During a failover, the proxy buffers incoming client data and flushes it once the new primary is reachable, making the switchover invisible to clients.
+This is a limited form of failover transparency: it works well for short outages, but the proxy has a configurable timeout (30\,s) beyond which client connections are dropped.
 
-  \item fault tolerance, dependability -- availability, reliability, integrity, maintainability, safety
-  \begin{itemize}
-    \item what happens if a component fails? is uninterrupted service required?
-    \item is data loss or corruption unacceptable?
-    \item how quickly must the system recover from faults?
-  \end{itemize}
+\paragraph{Consistency.}
+The authoritative server pattern provides a simple consistency model: only the server mutates game state, and clients are pure renderers.
+All client inputs are serialised through the server's game loop under a single \texttt{RLock}, so there are no concurrent write conflicts.
+One limitation worth noting is that the backup may hold a snapshot up to 100\,ms old at the time of failover, meaning a small amount of recent game state could be lost in a crash.
 
-  \item scalability
-  \begin{itemize}
-    \item will the system need to handle increasing numbers of users, requests, or data?
-    \item is it expected to grow over time?
-  \end{itemize}
+\paragraph{Performance and concurrency.}
+The server uses one thread per client connection plus a dedicated game-loop thread.
+State is broadcast to all clients every 100\,ms, which is adequate for a LAN setting with a small number of players.
+The thread-per-client model is simple but does not scale beyond a few dozen connections; this is acceptable given the four-player limit.
 
-  \item security, trust
-  \begin{itemize}
-    \item is sensitive data being processed or stored?
-    \item are there multiple user roles with different permissions?
-    \item is authentication or authorization required?
-  \end{itemize}
+\paragraph{Scalability.}
+The system is intentionally limited in scale: at most four players by game design, with an unbounded number of spectators in principle but constrained in practice by server resources.
+No horizontal scaling is implemented or required for the target use case.
 
-  \item resource sharing
-  \begin{itemize}
-    \item do multiple users or components need access to shared resources?
-    \item is coordination or synchronization needed?
-  \end{itemize}
+\paragraph{Resource sharing.}
+All clients share a single \texttt{GameService} instance on the server, which holds the authoritative game state.
+The proxy acts as a single entry point, concentrating all client traffic through one well-known address.
 
-  \item openness, interoperability, heterogeneity of components
-  \begin{itemize}
-    \item Will your system interact with external systems or use components built with different technologies?
-    \item Is standardization or compatibility important?
-  \end{itemize}
+\paragraph{Openness.}
+Communication uses TCP with line-delimited JSON payloads, both widely supported and human-readable.
+The message schema is defined in \texttt{src/common/constants.py}; any client implementing that schema can connect to the server, independent of language or platform.
 
-  \item evolvability, maintainability
-  \begin{itemize}
-    \item Will the system need to be updated or extended after deployment?
-    \item Is long-term maintenance a concern?
-  \end{itemize}
+\paragraph{Evolvability.}
+State snapshots carry a \texttt{"version"} field so that incompatible schema changes can be detected at runtime.
+The separation into three independent processes (server, proxy, client) with JSON as the interface means components can be replaced or updated without affecting the others, within the constraints of the current protocol.
 
-  \item performance, concurrency, computation / communication efficiency, bandwidth
-  \begin{itemize}
-    \item Are there strict requirements on response time or throughput?
-    \item Will many operations happen in parallel?
-    \item Is network usage a concern?
-  \end{itemize}
+\paragraph{Security.}
+No authentication or encryption is implemented.
+The system is intended for use on a trusted local network; extending it to an untrusted network would require at minimum TLS and some form of client authentication.
 
-  \item economy, costs  
-  \begin{itemize}
-    \item Are there budget constraints for development, deployment, or operation?
-    \item Is minimizing resource usage important?
-  \end{itemize}
-\end{itemize}
-
+% -----------------------------------------------------------------------
 \section{Design}\label{design}
-
-This chapter explains the strategies used to meet the requirements identified in the analysis. 
-%
-Ideally, the design should be the same, regardless of the technological choices made during the implementation phase.
-
-\begin{quote}
-You can re-arrange the sections as you prefer, but all the sections must be present in the end
-\end{quote}
-
-\noindent
-\textbf{Important:} try to motivate your design choices in relation to the requirements and features identified 
-in \cref{requirements} and \cref{ds-features}.
+% -----------------------------------------------------------------------
 
 \subsection{Architecture}\label{architecture}
 
+The system follows a \textbf{client-server} architectural style with a \textbf{proxy} interposed between clients and the server cluster.
+
+The server cluster consists of a \textbf{primary} server and a single hot-standby \textbf{backup}, automatically respawned after each promotion.
+The primary is the authoritative game engine; it replicates its state to the backup and exposes a heartbeat endpoint.
+The backup monitors the primary and promotes itself on failure.
+The proxy hides this topology from clients: it forwards traffic to a fixed backend port (the game port), buffers client data during failover, and reconnects to the new primary automatically.
+
+This design was chosen because:
 \begin{itemize}
-  \item Which architectural style?
-  %
-  \begin{itemize}
-    \item why?
-  \end{itemize}
+    \item A centralised authoritative server simplifies consistency: there is a single source of truth.
+    \item The proxy provides location transparency and simplifies client implementation.
+    \item The primary/backup pattern provides fault tolerance without the complexity of consensus protocols, which is appropriate for a two-node cluster with a single failure domain.
 \end{itemize}
+
+\paragraph{Alternative architectures considered.}
+The following alternatives were discarded in favour of the chosen design:
+
+\begin{itemize}
+    \item \textbf{Pure peer-to-peer}: Each client holds its own copy of the game state and propagates updates to peers.
+    This avoids a single point of failure but introduces distributed consistency problems: concurrent inputs from multiple clients can easily produce diverging game states.
+    Conflict resolution in a real-time game (e.g.\ two players moving to the same cell simultaneously) would require a consensus round for every input, adding unacceptable latency.
+
+    \item \textbf{Direct client-to-server without proxy}: Clients connect directly to the primary.
+    This would expose the primary's address to clients, making transparent failover impossible without requiring clients to implement their own discovery logic.
+    The proxy layer is what enables location transparency and automatic reconnection.
+
+    \item \textbf{Active-active replication (multi-master)}: Both primary and backup accept writes simultaneously.
+    This would improve write availability but requires conflict resolution for concurrent game-state mutations, which is considerably more complex than the passive-backup approach and unjustified for a two-node cluster.
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  box/.style  = {draw, rounded corners=4pt, minimum width=4.2cm,
+                 minimum height=0.9cm, align=center, fill=gray!8, font=\small},
+  sbox/.style = {draw, rounded corners=4pt, minimum width=3.0cm,
+                 minimum height=0.9cm, align=center, fill=gray!8, font=\small},
+  >=Stealth, thick
+]
+  \node[box]  (C)  at (0,0)  {\textbf{Clients}};
+  \node[box]  (Pr) at (0,-1.8)
+      {\textbf{Proxy}\\[-2pt]\scriptsize session-aware, transparent};
+  \node[box]  (Prim) at (0,-3.8)
+      {\textbf{Primary Server}\\[-2pt]\scriptsize game loop + state owner};
+  \node[sbox] (B)  at (5.2,-3.8)
+      {\textbf{Backup}\\[-2pt]\textbf{Server}};
+
+  \draw[->] (C)   -- node[right, font=\footnotesize]{\;TCP :5555} (Pr);
+  \draw[->] (Pr)  -- node[right, font=\footnotesize]{\;TCP :5556} (Prim);
+  \draw[->] ([yshift=10pt]Prim.east) --
+            node[above, font=\footnotesize]{replication :5557}
+            ([yshift=10pt]B.west);
+  \draw[->, dashed] ([yshift=-10pt]B.west) --
+            node[below, font=\footnotesize]{heartbeat :5565}
+            ([yshift=-10pt]Prim.east);
+\end{tikzpicture}
+\caption{High-level architecture of Distributed Bomberman.}
+\label{fig:architecture}
+\end{figure}
 
 \subsection{Infrastructure}\label{infrastructure}
 
+\paragraph{Infrastructural components.}
+Three process types are required to run the system; all can run on the same machine or on separate machines on the same LAN:
+
 \begin{itemize}
-  \item are there \emph{infrastructural components} that need to be introduced? \emph{how many}?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{clients}, \emph{servers}, \emph{load balancers},
-    \emph{caches}, \emph{databases}, \emph{message brokers},
-    \emph{queues}, \emph{workers}, \emph{proxies}, \emph{firewalls},
-    \emph{CDNs}, \emph{etc.}
-  \end{itemize}
+    \item \textbf{Server cluster} ($1 + 1$ instances): one active \emph{primary} server (port~5556) and one \emph{backup} server, which uses two ports: 5557 for receiving state snapshots (\texttt{BACKUP\_STATE\_PORT}) and 5558 as its own game port before promotion (\texttt{BACKUP\_GAME\_PORT}). Only the primary hosts the live \texttt{GameService} and accepts client connections; the backup runs in passive monitoring mode, receiving periodic state snapshots and waiting to be promoted. The primary automatically spawns the backup at startup via the \texttt{AutoSpawner} component; each newly promoted backup spawns a new one, maintaining fault tolerance continuously.
 
-  \item how do components \emph{distribute} over the network? \emph{where}?
-  %
-  \begin{itemize}
-    \item e.g.~do servers / brokers / databases / etc. sit on the same
-    machine? on the same network? on the same datacenter? on the same
-    continent?
-  \end{itemize}
+    \item \textbf{TCP proxy} (port 5555): a transparent relay that hides the primary/backup topology from clients. It forwards data in both directions, captures per-client \texttt{session\_id}s from the server's join acknowledgements, and manages failover transparently by buffering client data and sending \texttt{RECONNECT} handshakes to the new primary.
 
-  \item how do components \emph{find} each other?
-  %
-  \begin{itemize}
-    \item how to \emph{name} components?
-    \item e.g.~DNS, \emph{service discovery}, \emph{load balancing},
-    \emph{etc.}
-  \end{itemize}
+    \item \textbf{Client nodes} ($N$ instances): Pygame graphical client applications that connect to the proxy at a pre-configured address. Each client is a pure renderer: it sends input commands and renders whatever state snapshot the server broadcasts.
 \end{itemize}
 
-\begin{quote}
-Component diagrams are welcome here
-\end{quote}
+\paragraph{Network distribution.}
+All components communicate over standard TCP/IP sockets on a local area network.
+The assumption of a shared LAN (or VPN) eliminates the need to handle NAT traversal or firewall traversal, which are common challenges in fully distributed systems deployed over the public Internet.
+
+\paragraph{Service discovery.}
+Components locate each other through \textbf{static port configuration} defined in \texttt{src/common/constants.py}.
+This is a deliberate design choice justified by the deployment scenario:
+\begin{itemize}
+    \item The server cluster is a fixed two-node setup (primary + backup); there is no need to discover a dynamically changing set of server nodes.
+    \item Clients always connect through the proxy at a single, well-known address; if the proxy address changes, clients simply update the one constant.
+    \item A dynamic discovery mechanism (e.g.\ UDP broadcast) would add complexity without benefit for a LAN-local system with a fixed topology.
+\end{itemize}
+The trade-off is reduced flexibility for multi-site deployments, which is an acknowledged limitation noted in \cref{future-works}.
 
 \subsection{Modelling}\label{modelling}
 
+\paragraph{Domain entities.}
+The key domain entities are:
 \begin{itemize}
-  \item which \textbf{domain entities} are there?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{users}, \emph{products}, \emph{orders}, \emph{etc.}
-  \end{itemize}
-  
-  \item how do \emph{domain entities} \textbf{map to} \emph{infrastructural components}?
-  %
-  \begin{itemize}
-    \item e.g.~state of a video game on central server, while inputs/representations on clients
-    \item e.g.~where to store messages in an IM app? for how long?
-  \end{itemize}
-
-  \item which \textbf{domain events} are there?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{user registered}, \emph{product added to cart}, \emph{order placed}, \emph{etc.}
-  \end{itemize}
-  
-  \item which sorts of \textbf{messages} are exchanged?
-  %
-  \begin{itemize}
-    \item e.g.~\emph{commands}, \emph{events}, \emph{queries}, \emph{etc.}
-  \end{itemize}
-
-  \item what information does the \textbf{state} of the system comprehend
-  %
-  \begin{itemize}
-    \item e.g.~\emph{users' data}, \emph{products' data}, \emph{orders' data}, \emph{etc.}
-  \end{itemize}
+    \item \textbf{Player}: position $(x, y)$, name, lives, alive/disconnected status, reconnect session ID.
+    \item \textbf{Spectator}: name, join time, connected status.
+    \item \textbf{Bomb}: position, countdown timer, owner player ID.
+    \item \textbf{Explosion}: set of affected tiles, remaining display ticks.
+    \item \textbf{State}: the complete, versioned snapshot of the game -- game phase (\texttt{lobby / playing / victory}), map, all players, spectators, bombs, explosions, chat messages, winner.
 \end{itemize}
 
-\begin{quote}
-Class diagram are welcome here
-\end{quote}
+
+\paragraph{Domain class diagram.}
+Figure~\ref{fig:classes} shows the key domain classes and their relationships. Secondary entities (\texttt{Explosion}, \texttt{Spectator}) are omitted from the diagram for clarity but are part of the \texttt{State} snapshot.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  >=Stealth, font=\small,
+  cls/.style={
+    draw, rectangle split, rectangle split parts=2,
+    rectangle split part fill={gray!14, white},
+    align=left, inner sep=4pt, text width=3.0cm
+  },
+  rel/.style={->, thin},
+  lbl/.style={font=\scriptsize, fill=white, inner sep=1pt}
+]
+
+%% ---- SERVER side ----
+\node[cls] (GS) at (0,0) {
+  \centering\textbf{GameService}
+  \nodepart{two}
+  state : State\\
+  lock : RLock\\
+  \textit{tick(), add\_player()}
+};
+
+\node[cls] (ST) at (4.5, 0) {
+  \centering\textbf{State}
+  \nodepart{two}
+  phase : str\\
+  players : Dict[int, Player]\\
+  bombs : List[Bomb]\\
+  spectators : List\\
+  version : int
+};
+
+\node[cls] (PL) at (9.0, 1.2) {
+  \centering\textbf{Player}
+  \nodepart{two}
+  id, name : str\\
+  x, y : int\\
+  lives : int\\
+  session\_id : str\\
+  alive, disconnected : bool
+};
+
+\node[cls] (BM) at (9.0, -1.6) {
+  \centering\textbf{Bomb}
+  \nodepart{two}
+  x, y : int\\
+  timer : int\\
+  owner\_id : int
+};
+
+%% ---- CLIENT side ----
+\node[cls] (GC) at (0, -4.0) {
+  \centering\textbf{GameController}
+  \nodepart{two}
+  state : GameState\\
+  network : ClientNetwork\\
+  \textit{run(), handle\_input()}
+};
+
+\node[cls] (GA) at (4.5, -4.0) {
+  \centering\textbf{GameState}
+  \nodepart{two}
+  phase : str\\
+  snapshot : dict\\
+  \textit{update(data)}
+};
+
+\node[cls] (CN) at (9.0, -4.0) {
+  \centering\textbf{ClientNetwork}
+  \nodepart{two}
+  sock : socket\\
+  \textit{send(msg)}\\
+  \textit{receive\_loop()}
+};
+
+%% ---- Arrows ----
+\draw[rel] (GS.east) -- node[lbl, above]{owns} (ST.west);
+\draw[rel] (ST.east) |- node[lbl, above right]{1..*} (PL.west);
+\draw[rel] (ST.east) |- node[lbl, below right]{0..*} (BM.west);
+\draw[rel] (GC.east) -- node[lbl, above]{holds} (GA.west);
+\draw[rel] (GC.east) -- node[lbl, above]{uses} (CN.west);
+
+%% ---- Group boxes ----
+\begin{pgfonlayer}{background}
+  \node[draw, dashed, rounded corners=5pt, inner sep=8pt, fill=gray!4,
+        fit=(GS)(ST)(PL)(BM),
+        label={[font=\bfseries\small]above:Server}] {};
+  \node[draw, dashed, rounded corners=5pt, inner sep=8pt, fill=blue!3,
+        fit=(GC)(GA)(CN),
+        label={[font=\bfseries\small]above:Client}] {};
+\end{pgfonlayer}
+
+\end{tikzpicture}
+\caption{Domain class diagram of Distributed Bomberman.}
+\label{fig:classes}
+\end{figure}
+
+\paragraph{Component overview.}
+Figure~\ref{fig:components} shows the main classes and their relationships.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  % width=2.4cm, gap between adjacent nodes = 0.6cm (centres at ±1.5cm)
+  comp/.style  = {draw, rounded corners=2pt, minimum width=2.4cm,
+                  minimum height=0.55cm, align=center,
+                  font=\ttfamily\scriptsize, fill=gray!8},
+  compc/.style = {draw, rounded corners=2pt, minimum width=2.4cm,
+                  minimum height=0.55cm, align=center,
+                  font=\ttfamily\scriptsize, fill=blue!8},
+  compw/.style = {draw, rounded corners=2pt, minimum width=3.2cm,
+                  minimum height=0.55cm, align=center,
+                  font=\ttfamily\scriptsize, fill=gray!8},
+  compwc/.style= {draw, rounded corners=2pt, minimum width=3.2cm,
+                  minimum height=0.55cm, align=center,
+                  font=\ttfamily\scriptsize, fill=blue!8},
+  grp/.style   = {draw, rounded corners=5pt, dashed, inner sep=6pt, fill=gray!3},
+  hdr/.style   = {font=\bfseries\small},
+  arr/.style   = {-Stealth, thin, gray!70},
+  >=Stealth
+]
+\def\cx{1.5}   %% half-spacing for 2-col layout (gap = 3.0-2.4=0.6cm)
+
+%% ════════════════════════════════════════════
+%% PRIMARY SERVER  (left column, top)
+%% ════════════════════════════════════════════
+\node[hdr]   (ph) at (0, 0.15)    {Primary Server};
+\node[compw] (MS) at (0,-0.5)     {MainServer};
+\node[comp]  (AS) at (-\cx,-1.25) {AutoSpawner};
+\node[comp]  (PS) at ( \cx,-1.25) {PrimaryServer};
+\node[compw] (GS) at (0,-2.0)     {GameService};
+\node[compw] (ST) at (0,-2.75)    {State};
+\draw[arr] (MS.south) -- (AS.north);
+\draw[arr] (MS.south) -- (PS.north);
+\draw[arr] (MS.south) -- (GS.north);
+\draw[arr] (GS.south) -- (ST.north);
+\begin{pgfonlayer}{background}
+  \node[grp, fit=(ph)(MS)(AS)(PS)(GS)(ST)] {};
+\end{pgfonlayer}
+
+%% ════════════════════════════════════════════
+%% BACKUP SERVER  (left column, middle)
+%% ════════════════════════════════════════════
+\node[hdr]   (bh) at (0,-3.6)    {Backup Server};
+\node[compw] (BS) at (0,-4.25)   {BackupServer};
+\node[comp]  (FD) at (-\cx,-5.0) {FailureDetector};
+\node[comp]  (SR) at ( \cx,-5.0) {state\_recv()};
+\draw[arr] (BS.south) -- (FD.north);
+\draw[arr] (BS.south) -- (SR.north);
+\begin{pgfonlayer}{background}
+  \node[grp, fit=(bh)(BS)(FD)(SR)] {};
+\end{pgfonlayer}
+
+%% ════════════════════════════════════════════
+%% PROXY SERVER  (left column, bottom)
+%% ════════════════════════════════════════════
+\node[hdr]   (prh) at (0,-5.8)   {Proxy Server};
+\node[compw] (PR)  at (0,-6.45)  {ProxyServer};
+\node[comp]  (CS)  at (-\cx,-7.2){ClientSession[ ]};
+\node[comp]  (BC)  at ( \cx,-7.2){connect\_backend()};
+\draw[arr] (PR.south) -- (CS.north);
+\draw[arr] (PR.south) -- (BC.north);
+\begin{pgfonlayer}{background}
+  \node[grp, fit=(prh)(PR)(CS)(BC)] {};
+\end{pgfonlayer}
+
+%% ════════════════════════════════════════════
+%% CLIENT  (right column)
+%% ════════════════════════════════════════════
+\def\rx{5.8}   %% x-centre for client group
+\node[hdr]    (ch) at (\rx, 0.15)        {Client};
+\node[compwc] (GC) at (\rx,-0.5)         {GameController};
+\node[compc]  (GM) at (\rx-\cx,-1.25)    {GameState};
+\node[compc]  (CN) at (\rx+\cx,-1.25)    {ClientNetwork};
+\node[compc]  (LV) at (\rx-\cx,-2.0)     {LobbyView};
+\node[compc]  (GV) at (\rx,-2.0)         {GameView};
+\node[compc]  (VV) at (\rx+\cx,-2.0)     {VictoryView};
+\draw[arr] (GC.south) -- (GM.north);
+\draw[arr] (GC.south) -- (CN.north);
+\draw[arr] (GM.south) -- (LV.north);
+\draw[arr] (GC.south) -- (GV.north);
+\draw[arr] (CN.south) -- (VV.north);
+\begin{pgfonlayer}{background}
+  \node[grp, fit=(ch)(GC)(GM)(CN)(LV)(GV)(VV)] {};
+\end{pgfonlayer}
+
+\end{tikzpicture}
+\caption{Component overview of Distributed Bomberman. Sub-components shown as methods (e.g.\ \texttt{state\_recv()}, \texttt{connect\_backend()}) are internal routines rather than separate classes.}
+\label{fig:components}
+\end{figure}
+
+\paragraph{State ownership.}
+The \texttt{State} object lives exclusively on the server.
+Clients receive a serialised projection of the state at each tick; they never mutate it directly.
+The \texttt{State} is serialised to a versioned JSON dictionary for both client broadcast and replication.
+
+\paragraph{Messages.}
+Two classes of messages are exchanged:
+\begin{itemize}
+    \item \textbf{Commands} (client $\to$ server): \texttt{MOVE:\{direction\}}, \texttt{BOMB}, \texttt{START\_GAME}, \texttt{JOIN\_GAME} (spectator requests player slot), \texttt{CHAT:\{message\}}.
+    \item \textbf{State snapshots} (server $\to$ client): full JSON serialisation of the current state, sent every 100\,ms.
+    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (proxy $\to$ server post-failover), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
+\end{itemize}
 
 \subsection{Interaction}\label{interaction}
 
-\begin{itemize}
-  \item how do components \emph{communicate}? \emph{when}? \emph{what}?
-  \item \emph{which} \textbf{interaction patterns} do they enact?
-\end{itemize}
+\paragraph{Interaction pattern.}
+Distributed Bomberman uses a \textbf{pure client-server} interaction model: all communication — game commands, state updates, chat — flows through the proxy to the primary server.
 
-\begin{quote}
-Sequence diagrams are welcome here
-\end{quote}
+This choice was deliberate:
+\begin{itemize}
+    \item \textbf{Consistency}: a single serialisation point (the server game loop) eliminates the possibility of concurrent writes and distributed state divergence.
+    \item \textbf{Simplicity}: clients have no peer-discovery logic, no direct connections to other clients, and no need to synchronise local replicas.
+    \item \textbf{Fault tolerance}: the proxy-mediated model makes failover transparent; clients never know which physical server they are talking to.
+\end{itemize}
+The trade-off is that the server becomes a bandwidth bottleneck for state broadcasts, which is acceptable given the small player count (max 4) and the 100\,ms tick rate.
+
+\paragraph{Communication model.}
+All messages are serialised as \textbf{line-delimited JSON} over persistent TCP connections (one connection per client, kept open for the entire session).
+The server operates in a \textbf{publish-subscribe} style for state updates: after each game tick it pushes a full state snapshot to all connected clients simultaneously, without waiting for a request.
+Client-to-server commands follow a \textbf{fire-and-forget} pattern: the client sends a command (e.g.\ \texttt{MOVE:UP}) and immediately continues; the effect appears in the next state broadcast.
+
+\paragraph{Join sequence.}
+Figure~\ref{fig:seq-join} shows the message flow when a client connects.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth,
+  head/.style = {draw, minimum width=2.5cm, minimum height=0.65cm,
+                 align=center, fill=gray!15, rounded corners=3pt},
+  msg/.style  = {->, thick},
+  ret/.style  = {->, thick, dashed},
+  lbl/.style  = {font=\footnotesize, fill=white, inner sep=2pt},
+  note/.style = {font=\footnotesize\itshape}
+]
+\def\xC{0} \def\xP{4.5} \def\xS{9.0}
+\def\yTop{0} \def\yBot{-7.5}
+
+%% participant headers
+\node[head] at (\xC,\yTop) {Client};
+\node[head] at (\xP,\yTop) {Proxy};
+\node[head] at (\xS,\yTop) {Primary Server};
+
+%% lifelines
+\draw[gray!50, dashed] (\xC,-0.3) -- (\xC,\yBot);
+\draw[gray!50, dashed] (\xP,-0.3) -- (\xP,\yBot);
+\draw[gray!50, dashed] (\xS,-0.3) -- (\xS,\yBot);
+
+%% 1. TCP connect  C -> P
+\draw[msg] (\xC,-0.9) -- node[lbl, above]{TCP connect} (\xP,-0.9);
+%% 2. TCP connect  P -> S
+\draw[msg] (\xP,-1.5) -- node[lbl, above]{TCP connect} (\xS,-1.5);
+%% 3. join_success  S -> P
+\draw[ret] (\xS,-2.2) -- node[lbl, above]{join\_success (player\_id, session\_id)} (\xP,-2.2);
+%% capture note
+\node[note, right] at (\xP+0.2,-2.65) {[proxy captures session\_id]};
+%% 4. join_success forwarded  P -> C
+\draw[ret] (\xP,-3.1) -- node[lbl, above]{join\_success (forwarded)} (\xC,-3.1);
+%% 5. state broadcast  S -> P  (loop)
+\draw[ret] (\xS,-3.8) -- node[lbl, above]{state \{every 100\,ms\}} (\xP,-3.8);
+%% 6. state forwarded  P -> C
+\draw[ret] (\xP,-4.2) -- node[lbl, above]{state (forwarded)} (\xC,-4.2);
+%% 7. MOVE command  C -> P
+\draw[msg] (\xC,-5.0) -- node[lbl, above]{MOVE:UP} (\xP,-5.0);
+%% 8. MOVE  P -> S
+\draw[msg] (\xP,-5.4) -- node[lbl, above]{MOVE:UP} (\xS,-5.4);
+%% 9. updated state  S -> P
+\draw[ret] (\xS,-6.1) -- node[lbl, above]{state (updated)} (\xP,-6.1);
+%% 10. state  P -> C
+\draw[ret] (\xP,-6.5) -- node[lbl, above]{state} (\xC,-6.5);
+\end{tikzpicture}
+\caption{Join and normal operation sequence diagram.}
+\label{fig:seq-join}
+\end{figure}
+
+On join, the server sends a \texttt{join\_success} JSON object containing the player's assigned ID and a unique \texttt{session\_id} (UUID4).
+The proxy captures this session ID and uses it to send a \texttt{RECONNECT:\{session\_id\}} message to the new primary after a failover.
+
+\paragraph{Game-start sequence.}
+Figure~\ref{fig:seq-start} shows the message flow when the host starts the match.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth,
+  head/.style = {draw, minimum width=2.5cm, minimum height=0.65cm,
+                 align=center, fill=gray!15, rounded corners=3pt},
+  msg/.style  = {->, thick},
+  ret/.style  = {->, thick, dashed},
+  lbl/.style  = {font=\footnotesize, fill=white, inner sep=2pt},
+  note/.style = {font=\footnotesize\itshape}
+]
+\def\xC{0} \def\xP{4.5} \def\xS{9.0}
+\def\yTop{0} \def\yBot{-5.5}
+
+%% participant headers
+\node[head] at (\xC,\yTop) {Client (Host)};
+\node[head] at (\xP,\yTop) {Proxy};
+\node[head] at (\xS,\yTop) {Primary Server};
+
+%% lifelines
+\draw[gray!50, dashed] (\xC,-0.33) -- (\xC,\yBot);
+\draw[gray!50, dashed] (\xP,-0.33) -- (\xP,\yBot);
+\draw[gray!50, dashed] (\xS,-0.33) -- (\xS,\yBot);
+
+%% 1. START_GAME
+\draw[msg] (\xC,-1.0) -- node[lbl, above]{START\_GAME} (\xP,-1.0);
+\draw[msg] (\xP,-1.5) -- node[lbl, above]{START\_GAME} (\xS,-1.5);
+
+%% 2. server transitions, replication
+\node[note, right] at (\xS+0.15,-2.1) {[phase: LOBBY $\to$ PLAYING]};
+\node[note, right] at (\xS+0.15,-2.55) {[replicates new state to backup]};
+
+%% 3. state broadcast
+\draw[ret] (\xS,-3.3) -- node[lbl, above]{state \{phase: PLAYING\}} (\xP,-3.3);
+\draw[ret] (\xP,-3.7) -- node[lbl, above]{state (forwarded)} (\xC,-3.7);
+
+%% 4. MOVE
+\draw[msg] (\xC,-4.5) -- node[lbl, above]{MOVE:RIGHT} (\xP,-4.5);
+\draw[msg] (\xP,-4.9) -- node[lbl, above]{MOVE:RIGHT} (\xS,-4.9);
+\end{tikzpicture}
+\caption{Game-start sequence diagram.}
+\label{fig:seq-start}
+\end{figure}
+
+\paragraph{Failover sequence.}
+Figure~\ref{fig:seq-failover} shows the message flow during a primary server failure and recovery.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth,
+  head/.style  = {draw, minimum width=2.2cm, minimum height=0.65cm,
+                  align=center, fill=gray!15, rounded corners=3pt},
+  msg/.style   = {->, thick},
+  ret/.style   = {->, thick, dashed},
+  lbl/.style   = {font=\footnotesize, fill=white, inner sep=2pt},
+  note/.style  = {font=\footnotesize\itshape}
+]
+\def\xC{0} \def\xP{3.2} \def\xPrim{6.5} \def\xB{10.0}
+\def\crash{-2.4}  %% y at which primary dies
+
+%% participant headers
+\node[head] at (\xC,0)    {Client};
+\node[head] at (\xP,0)    {Proxy};
+\node[head] at (\xPrim,0) {Primary};
+\node[head] at (\xB,0)    {Backup};
+
+%% lifelines  (primary stops at crash)
+\draw[gray!50, dashed] (\xC,   -0.3) -- (\xC,   -8.5);
+\draw[gray!50, dashed] (\xP,   -0.3) -- (\xP,   -8.5);
+\draw[gray!50, dashed] (\xPrim,-0.3) -- (\xPrim,\crash);
+\draw[gray!50, dashed] (\xB,   -0.3) -- (\xB,   -8.5);
+
+%% 1. HEARTBEAT  B -> Prim
+\draw[msg] (\xB,-0.9) -- node[lbl, above]{HEARTBEAT} (\xPrim,-0.9);
+%% 2. ALIVE  Prim -> B
+\draw[ret] (\xPrim,-1.4) -- node[lbl, above]{ALIVE} (\xB,-1.4);
+
+%% CRASH marker
+\draw[red!70, line width=1.2pt]
+  (\xPrim-0.2, \crash+0.15) -- (\xPrim+0.2, \crash-0.15)
+  (\xPrim+0.2, \crash+0.15) -- (\xPrim-0.2, \crash-0.15);
+\node[font=\scriptsize\bfseries, text=red!70, right] at (\xPrim+0.25,\crash) {CRASH};
+
+%% 3. timeout + promote note at backup
+\node[note, right] at (\xB+0.2,-3.0)  {[timeout 1.5\,s $\Rightarrow$ promote]};
+\node[note, right] at (\xB+0.2,-3.45) {[re-binds port 5556]};
+
+%% 4. backend drop + buffer note at proxy
+\node[note, right] at (\xP+0.2,-3.0)  {[backend drop]};
+\node[note, right] at (\xP+0.2,-3.45) {[buffering client data]};
+
+%% 5. client sends command (buffered)
+\draw[msg] (\xC,-4.2) -- node[lbl, above]{command} (\xP,-4.2);
+\node[note, right] at (\xP+0.2,-4.55) {[buffered]};
+
+%% 6. proxy TCP-connects to new primary (backup)
+\draw[msg] (\xP,-5.3) -- node[lbl, above]{TCP connect} (\xB,-5.3);
+%% 7. RECONNECT per session
+\draw[msg] (\xP,-5.85) -- node[lbl, above]{RECONNECT:session\_id} (\xB,-5.85);
+\node[note, right] at (\xB+0.2,-6.2) {[reattach client]};
+%% 8. flush buffer
+\draw[msg] (\xP,-6.7) -- node[lbl, above]{flush buffer} (\xB,-6.7);
+%% 9. state resumes
+\draw[ret] (\xB,-7.3) -- node[lbl, above]{state (100\,ms)} (\xP,-7.3);
+\draw[ret] (\xP,-7.7) -- node[lbl, above]{state} (\xC,-7.7);
+%% 10. new backup
+\node[note, right] at (\xB+0.2,-8.3) {[spawns new backup]};
+
+\end{tikzpicture}
+\caption{Failover sequence diagram.}
+\label{fig:seq-failover}
+\end{figure}
+
+Primary-to-backup replication uses a separate TCP connection per snapshot: the primary opens a fresh connection to the backup's state-receiver port, sends a length-prefixed JSON payload, and closes it. This approach is simple to implement but creates a new connection every 100\,ms; a persistent replication channel would be more efficient, though the overhead is negligible at this scale.
 
 \subsection{Behaviour}\label{behaviour}
 
+\paragraph{Game phase state machine.}
+The server \texttt{State} object progresses through three distinct phases (Figure~\ref{fig:fsm}):
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth,
+  state/.style = {draw, rounded corners=5pt, minimum width=2.4cm,
+                  minimum height=0.8cm, align=center,
+                  fill=blue!10, font=\bfseries\small},
+  lbl/.style   = {font=\scriptsize, align=center, fill=white, inner sep=2pt}
+]
+  \node[state] (L) at (0,0)    {LOBBY};
+  \node[state] (P) at (5.8,0)  {PLAYING};
+  \node[state] (V) at (11.6,0) {VICTORY};
+
+  %% initial arrow
+  \draw[->, thick] (-1.6,0) -- (L);
+
+  %% LOBBY -> PLAYING
+  \draw[->, thick] (L) -- node[lbl, above]{host presses Start\\($\geq$2 players)} (P);
+
+  %% PLAYING -> VICTORY
+  \draw[->, thick] (P) -- node[lbl, above]{one survivor\\or all die} (V);
+
+  %% VICTORY -> LOBBY (arc below)
+  \draw[->, thick] (V.south) .. controls +(0,-2.0) and +(0,-2.0) ..
+      node[lbl, below]{countdown expires} (L.south);
+\end{tikzpicture}
+\caption{Server game phase state machine.}
+\label{fig:fsm}
+\end{figure}
+
+\textbf{LOBBY}: The server waits for players to connect.
+The host can start the game when at least two players are present.
+Spectators may request a player slot by pressing J (lobby only; not permitted during an active match).
+A player who disconnects in the lobby is removed immediately.
+
+\textbf{PLAYING}: The game loop is active.
+Players move and place bombs; the server processes inputs, detonates bombs, computes explosions, and reduces player lives.
+A player who disconnects mid-game is marked \texttt{disconnected=True, alive=False} and cannot rejoin during normal operation. Session restoration via the \texttt{RECONNECT} handshake is triggered only by a proxy-mediated failover, not by voluntary reconnection.
+
+\textbf{VICTORY}: One player has survived (or all died simultaneously for a draw).
+The winner is recorded.
+A countdown runs (the ``return to lobby'' timer); when it expires, the state is reset to LOBBY and a new match can begin.
+
+\paragraph{Game loop (server).}
+The server runs a fixed-rate game loop at 10\,Hz (100\,ms per tick).
+Each tick:
+\begin{enumerate}
+    \item Decrement bomb timers; detonate expired bombs, compute explosion cells, reduce player lives.
+    \item Decrement explosion display timers; remove expired explosions.
+    \item Check victory conditions.
+    \item If in the victory phase, decrement the return-to-lobby timer.
+    \item Broadcast the full state to all connected clients and spectators.
+\end{enumerate}
+
+\paragraph{Client reactive behaviour.}
+The client does not implement its own state machine.
+Instead it behaves as a \textbf{reactive consumer}: it renders whatever state the server broadcasts.
+The \texttt{GameController} inspects the \texttt{phase} field of each received snapshot and switches the active view accordingly:
 \begin{itemize}
-  \item how does \emph{each} component \textbf{behave} individually (e.g.~in \emph{response} to \emph{events} or messages)?
-  \begin{itemize}
-    \item some components may be \emph{stateful}, others \emph{stateless}
-  \end{itemize}
-
-  \item which components are in charge of updating the \textbf{state} of the system? \emph{when}? \emph{how}?
+  \item \texttt{lobby} $\Rightarrow$ \texttt{LobbyView}: displays connected players, spectators, and the ``Start Game'' button (host only).
+  \item \texttt{playing} $\Rightarrow$ \texttt{GameView}: renders the grid, players, bombs, and explosions in real time.
+  \item \texttt{victory} $\Rightarrow$ \texttt{VictoryView}: shows the winner (or draw) and the return-to-lobby countdown.
 \end{itemize}
-
-\begin{quote}
-State diagrams are welcome here
-\end{quote}
+This design means the client requires zero changes to handle failover: the proxy restores the TCP stream transparently, and the next state broadcast simply resumes rendering.
 
 \subsection{Data and Consistency Issues}\label{data-and-consistency-issues}
 
-\begin{itemize}
-  \item Is there any data that needs to be stored?
-  %
-  \begin{itemize}
-    \item \emph{what} data? \emph{where}? \emph{why}?
-  \end{itemize}
-  
-  \item how should \emph{persistent data} be \textbf{stored}?
-  %
-  \begin{itemize}
-    \item e.g.~relations, documents, key-value, graph, etc.
-    \item why?
-  \end{itemize}
-  
-  \item Which components perform queries on the database?
-  %
-  \begin{itemize}
-    \item \emph{when}? \emph{which} queries? \emph{why}?
-    \item concurrent read? concurrent write? why?
-  \end{itemize}
-  
-  \item Is there any data that needs to be shared between components?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{what} data?
-  \end{itemize}
-\end{itemize}
+No persistent storage is used: all game state is in memory.
+State is only replicated between the primary and the backup for fault tolerance purposes, not for durability.
+On a complete cluster failure (both primary and backup crash simultaneously), the game state is lost.
+
+Concurrent access to the \texttt{GameService} is serialised through a single \texttt{threading.RLock}, ensuring that client handler threads and the game loop thread never mutate the state concurrently.
+
+\paragraph{Consistency model.}
+From the clients' perspective, the system provides a straightforward consistency model: every state snapshot broadcast by the server reflects all inputs processed up to that tick, and clients never modify state locally.
+In practice, clients observe state that is at most one tick old (100\,ms), which is acceptable for the target use case.
+
+Between the primary and the backup, consistency is \textbf{eventual} rather than strong: the backup's replicated state lags the primary by at most one replication interval (100\,ms).
+This means that in the event of a primary crash, the backup may be missing up to 100\,ms of game events.
+This trade-off was intentional: synchronous replication (waiting for a backup acknowledgement before processing each input) would have added per-tick latency unacceptable for a real-time game.
+
+\paragraph{State versioning.}
+Each snapshot sent to the backup includes a \texttt{"version"} field (currently \texttt{1}).
+The backup checks this field on receipt and discards snapshots with an incompatible version.
+This prevents a stale or malformed snapshot from corrupting the backup's state after a code upgrade.
+
+\paragraph{Replication completeness.}
+The state codec (\texttt{state\_to\_dict} / \texttt{state\_from\_dict}) serialises the complete game state, including all player fields (position, lives, session IDs, disconnection status), all active bombs and explosions, spectator list, chat history, and game phase.
+The serialisation round-trip is verified by a dedicated test module (\texttt{test\_state\_codec.py}) to ensure that no field is silently dropped or corrupted during replication.
 
 \subsection{Fault-Tolerance}\label{fault-tolerance}
 
-\begin{itemize}
-  \item Is there any form of data \textbf{replication} / federation / sharing?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{how} does it work?
-  \end{itemize}
-  
-  \item Is there any \textbf{heart-beating}, \textbf{timeout}, \textbf{retry mechanism}?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{among} which components? \emph{how} does it work?
-  \end{itemize}
-  
-  \item Is there any form of \textbf{error handling}?
-  %
-  \begin{itemize}
-    \item \emph{what} happens when a component fails? \emph{why}? \emph{how}?
-  \end{itemize}
-\end{itemize}
+\paragraph{State replication.}
+The primary serialises the full \texttt{State} as a versioned JSON snapshot and pushes it to the backup every 100\,ms.
+The backup deserialises the snapshot and keeps it in memory as \texttt{replicated\_state}.
+On promotion, the backup restores this state directly into its \texttt{GameService}.
+
+\paragraph{Failure detection.}
+The \texttt{FailureDetector} class tracks the timestamp of the last successful heartbeat.
+It declares the primary failed if no heartbeat has been received for more than 1.5\,s.
+The backup polls the primary's heartbeat port (TCP, short-lived connections) every 500\,ms.
+
+\paragraph{Post-failover session restore.}
+When a player disconnects normally, the server marks them as \texttt{disconnected} and removes them from the game (immediately in the lobby; after the current tick in a running match).
+The \texttt{RECONNECT} handshake is used exclusively in the failover scenario: the proxy sends the captured \texttt{session\_id} to the new primary, which looks it up in the reconnect registry rebuilt from the replicated state and re-attaches the client without creating a duplicate player entry.
+
+\paragraph{Proxy buffering.}
+During failover, the proxy keeps the client-side TCP connections alive and buffers all data sent by clients.
+Once the new primary is available, buffered data is flushed before normal forwarding resumes.
 
 \subsection{Availability}\label{availability}
 
-\begin{itemize}
-  \item Is there any \textbf{caching} mechanism?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
-  
-  \item Is there any form of \textbf{load balancing}?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
+The proxy acts as a single logical entry point.
+It does not perform load balancing (there is only one active server at any time) but it hides the primary/backup switchover from clients, ensuring continuous availability.
 
-  \item In case of \textbf{network partitioning}, how does the system behave?
-  %
-  \begin{itemize}
-    \item \emph{why}? \emph{how}?
-  \end{itemize}
-\end{itemize}
+There is no caching layer: clients always receive a fresh state broadcast every 100\,ms.
 
-\subsection{Security}\label{security}
+In the case of a network partition between the proxy and the primary (but not between the backup and the proxy), the backup would be promoted and take over. Full partition handling beyond this scenario is outside the scope of the project.
 
-\begin{itemize}
-  \item Is there any form of \textbf{authentication}?
-  %
-  \begin{itemize}
-    \item \emph{where}? \emph{why}?
-  \end{itemize}
+\paragraph{CAP theorem analysis.}
+In the CAP theorem framework, a distributed system can guarantee at most two of: \textbf{Consistency}, \textbf{Availability}, and \textbf{Partition tolerance} \citep{tanenbaum2007distributed}.
+Partition tolerance is not optional in any real network — partitions can always occur — so the meaningful choice is how the system behaves \emph{when} a partition happens.
 
-  \item Is there any form of \textbf{authorization}?
-  %
-  \begin{itemize}
-    \item which sort of \emph{access control}?
-    \item which sorts of users / \emph{roles}? which \emph{access rights}?
-  \end{itemize}
+In the absence of partitions, Distributed Bomberman provides both consistency and availability: all clients observe the same game state (the authoritative server is the single source of truth), and the primary/backup pair with proxy buffering keeps the service running through a primary crash.
 
-  \item Are \textbf{cryptographic schemas} being used?
-  %
-  \begin{itemize}
-    \item e.g.~token verification,
-    \item e.g.~data encryption, etc.
-  \end{itemize}
-\end{itemize}
+In the presence of a partition, the system sacrifices availability in favour of consistency: if the proxy cannot reach any server, clients receive no updates rather than potentially inconsistent ones.
+The system therefore behaves as \textbf{CP} under partition.
 
+Two limitations are worth noting explicitly.
+First, the proxy is a \textbf{single point of failure}: if it crashes or is partitioned from all clients, the entire service becomes unavailable even if primary and backup are healthy.
+This is a deliberate trade-off: unlike the primary, the proxy holds no game state, so a proxy crash severs connections without losing match data.
+Eliminating this limitation would require either replicating the proxy — which introduces its own coordination problem — or embedding reconnection logic in the client; both options were considered out of scope for this project.
+Second, a split-brain scenario — where a partition separates primary and backup while both remain reachable by the proxy — is not handled and could result in two active primaries; this is an acknowledged limitation outside the scope of the project.
+
+% -----------------------------------------------------------------------
 \section{Implementation}\label{implementation}
+% -----------------------------------------------------------------------
 
-Please report here all the implementation (technology-dependent) choices you made while implementing your design.
+\subsection{Technology Stack}
 
-\begin{quote}
-  If you run out of time for this project, you may consider leaving some aspect unimplemented, 
-  and simply discuss how you would have implemented them.
-  %
-  In this case, better would be to discuss unimplemented features in \cref{future-works}.
-\end{quote}
+The system is implemented in \textbf{Python 3.10+} \citep{python}, using only the standard library for networking (\texttt{socket}, \texttt{threading}, \texttt{json}).
+The graphical client is built with \textbf{Pygame 2.5} \citep{pygame}, chosen for its suitability for real-time 2D rendering and its straightforward event loop.
+Inter-component communication uses \textbf{JSON over TCP}, a deliberate choice over binary formats for human-readability and ease of debugging.
+The project is packaged with \textbf{Poetry} \citep{poetry} for reproducible dependency management, with entry points \texttt{bomberman-server}, \texttt{bomberman-proxy}, and \texttt{bomberman-client}.
+The test suite is written with \textbf{pytest} \citep{pytest}.
+Session IDs are generated using \textbf{UUID4} from the standard library.
 
+\paragraph{Network protocol.}
+All communication uses \textbf{TCP} (Python \texttt{socket} module).
+TCP was chosen over UDP because the game uses an authoritative server model: every client input must be delivered reliably and in order.
+The server buffers messages up to 64\,KB per connection to protect against malformed frames.
+
+\paragraph{Data representation.}
+All messages are serialised as \textbf{JSON}, one object per line (\texttt{{\textbackslash}n}-delimited).
+JSON was chosen for its human-readability (useful for debugging) and for native Python support via the \texttt{json} standard library module.
+The state snapshot uses a versioned schema (\texttt{"version": 1}) to detect incompatible snapshots during replication.
+
+\paragraph{Concurrency model.}
+The server uses \textbf{one thread per client connection} plus a dedicated game-loop thread and fault-tolerance threads (heartbeat responder, replication sender).
+Access to the shared \texttt{GameService} is protected by a single \texttt{threading.RLock}.
+
+\paragraph{MVC on the client.}
+The client is structured following the \textbf{Model-View-Controller} pattern:
 \begin{itemize}
-  \item which \textbf{network protocols} to use?
-  %
-  \begin{itemize}
-    \item e.g.~UDP, TCP, HTTP, WebSockets, gRPC, XMPP, AMQP, MQTT, etc.
-  \end{itemize}
-  
-  \item how should \emph{in-transit data} be \textbf{represented}?
-  %
-  \begin{itemize}
-    \item e.g.~JSON, XML, YAML, Protocol Buffers, etc.
-  \end{itemize}
-  
-  \item how should \emph{databases} be \textbf{queried}?
-  %
-  \begin{itemize}
-    \item e.g.~SQL, NoSQL, etc.
-  \end{itemize}
-  
-  \item how should components be \emph{authenticated}?
-  %
-  \begin{itemize}
-    \item e.g.~OAuth, JWT, etc.
-  \end{itemize}
-
-  \item how should components be \emph{authorized}?
-  %
-  \begin{itemize}
-    \item e.g.~RBAC, ABAC, etc.
-  \end{itemize}
+    \item \textbf{Model} (\texttt{GameState}): holds the last received state snapshot.
+    \item \textbf{View} (\texttt{LobbyView}, \texttt{GameView}, \texttt{VictoryView}, \ldots): renders the current screen using Pygame.
+    \item \textbf{Controller} (\texttt{GameController}): translates keyboard input into server commands.
+    \item \textbf{Network} (\texttt{ClientNetwork}): handles the TCP connection and message framing in a background thread.
 \end{itemize}
 
-\subsection{Technological details}\label{technological-details}
+The MVC separation means that the client's rendering logic is completely decoupled from the network layer.
+When the \texttt{ClientNetwork} thread receives a new state snapshot, it updates the \texttt{GameState} model; the Pygame main loop then re-renders whatever the model currently holds.
+This design also simplifies the failover scenario on the client side: since the client has no concept of ``which server'' it is connected to, a transparent reconnect by the proxy requires zero client-side changes.
 
-\begin{itemize}
-  \item any particular \emph{framework} / \emph{technology} being exploited goes here
-\end{itemize}
+\paragraph{Proxy implementation.}
+The proxy spawns one thread per client connection.
+Each thread manages both directions of the relay — client-to-backend and backend-to-client — using \texttt{select()} to multiplex the two sockets without blocking.
+During failover, the thread detects the backend drop, accumulates incoming client data in a local buffer (\texttt{client\_buf}), and retries the backend connection for up to 30\,s.
+Once reconnected, it sends the \texttt{RECONNECT:\{session\_id\}} handshake and flushes the buffer before resuming normal forwarding.
 
+\paragraph{AutoSpawner and process management.}
+The \texttt{AutoSpawner} uses Python's \texttt{subprocess} module to launch the backup server as a child process.
+When the backup is promoted to primary, it invokes \texttt{AutoSpawner} again to spawn a new backup, maintaining fault tolerance continuously.
+If the backup process terminates unexpectedly, a background monitor thread detects the failure and automatically respawns a new backup, so the replication channel is restored without operator intervention.
+
+
+% -----------------------------------------------------------------------
 \section{Validation}\label{validation}
+% -----------------------------------------------------------------------
 
 \subsection{Automatic Testing}\label{automatic-testing}
 
-\begin{itemize}
-  \item how were individual components \textbf{\emph{unit}-test}ed?
-  
-  \item how was communication, interaction, and/or integration among components tested?
-  
-  \item how to \textbf{\emph{end-to-end}-test} the system?
-  %
-  \begin{itemize}
-    \item e.g.~production vs.~test environment
-  \end{itemize}
+Validation was performed through a combination of automated unit testing and manual end-to-end testing.
+The automated test suite consists of 99 tests across five modules, located in \texttt{src/test/} and executable with:
+\begin{lstlisting}
+poetry run pytest src/test
+\end{lstlisting}
+Tests use Python's \texttt{unittest} framework. Where network or Pygame dependencies would be required, components are isolated using \texttt{unittest.mock} (\texttt{Mock}, \texttt{patch}), allowing each layer to be tested independently.
 
-  \item for each test specify:
-  %
-  \begin{itemize}
-    \item rationale of individual tests
-    \item how were the test automated
-    \item how to run them
-    \item which requirement they are testing, if any
-  \end{itemize}
-\end{itemize}
+\paragraph{test\_core.py -- 17 unit tests for pure game logic.}
+Tests cover: safe zone computation, player spawn points, connected player count, spectator join eligibility, chat message handling, map generation (boundary walls, safe spawn areas), tile walkability, player presence checks, movement, bomb placement and explosion propagation, victory detection (single winner and draw), block regeneration safety, and lobby reset.
+All tests are deterministic and require no network or Pygame initialisation.
 
-\begin{quote}
-recall that \emph{deployment} \textbf{automation} is commonly used to \emph{test} the system in \emph{production-like} environment
-\end{quote}
+\paragraph{test\_game.py -- 31 client-side unit tests.}
+Tests cover the \texttt{GameState} model (initial state, phase transitions on lobby/playing/victory snapshots, player and spectator data extraction) and the \texttt{GameController} (key bindings for movement, bomb placement, chat activation, spectator join request, host start command).
+Network dependencies are replaced with \texttt{Mock} objects, isolating the controller from the TCP layer.
 
-\begin{quote}
-recall to test corner cases (crashes, errors, etc.)
-\end{quote}
+\paragraph{test\_controller.py -- 28 command and network unit tests.}
+Tests cover the server-side \texttt{CommandController} (movement, bomb, game start, spectator join, chat, case-insensitive command parsing, host-only enforcement) and the client-side \texttt{NetworkManager} (socket send, receive loop, connection error handling, thread lifecycle, JSON parsing of incoming messages).
+Socket objects are mocked via \texttt{Mock(spec=socket.socket)} and thread creation is patched with \texttt{@patch('threading.Thread')}.
 
-\subsection{Acceptance test}\label{acceptance-test}
+\paragraph{test\_game\_service.py -- 19 service layer tests.}
+Tests cover the full player and spectator lifecycle (join, disconnect, removal, host reassignment on disconnect), game start and return-to-lobby transitions, and the game tick (bomb timer decrement, detonation, explosion cleanup, life reduction, victory detection under both single-winner and draw conditions).
 
-\begin{itemize}
-  \item did you perform any \emph{manual} testing?
-  %
-  \begin{itemize}
-    \item what did you test?
-    \item why wasn't it automatic?
-  \end{itemize}
-\end{itemize}
+\paragraph{test\_state\_codec.py -- 4 serialisation round-trip tests.}
+Tests verify that a fully populated \texttt{State} object (including players with all fields, bombs, explosions, spectators, and chat history) survives a complete \texttt{state\_to\_dict} / \texttt{state\_from\_dict} round-trip without data loss.
+These tests directly validate the correctness of the replication payload sent from primary to backup.
 
+\subsection{Acceptance Test}\label{acceptance-test}
+
+Manual end-to-end testing was performed to validate the fault-tolerance behaviour:
+
+\begin{enumerate}
+    \item Start server, proxy, and two clients using \texttt{bash start.sh}.
+    \item Start a match; verify real-time state synchronisation across clients.
+    \item Identify the primary server PID via \texttt{netstat -ano | grep 5556}.
+    \item Kill the primary with \texttt{taskkill /PID \{pid\} /F}.
+    \item Observe: the backup promotes itself (new PID appears on port 5556), clients remain connected, and the match continues without returning to the lobby.
+    \item Repeat the kill on the newly promoted primary to verify that a second failover completes correctly.
+\end{enumerate}
+
+Manual testing was necessary for the failover scenario because it requires OS-level process termination and real TCP connections, which are difficult to reproduce reliably in a unit test environment.
+
+% -----------------------------------------------------------------------
 \section{Deployment}\label{deployment}
+% -----------------------------------------------------------------------
+
+\subsection{Prerequisites}
 
 \begin{itemize}
-  \item should one install your software from scratch, how to do it?
-  %
-  \begin{itemize}
-    \item provide instructions
-    \item provide expected outcomes
-  \end{itemize}
-
-  \item what software should be installed on the machines to run your project? which versions?
-  
-  \item should one set environment variables or configuration files?
-  
-  \item if you're using containerization (e.g.~Docker), 
-  describe how you engineered your deployment scrips (e.g. \texttt{docker-compose.yml} files)
+    \item Python 3.10 or higher.
+    \item \href{https://python-poetry.org/docs/#installation}{Poetry} (install via \texttt{pip install poetry} if not available).
 \end{itemize}
 
+\subsection{Installation}
+
+From the project root (\texttt{Distributed-Bomberman/}):
+\begin{lstlisting}
+poetry install
+\end{lstlisting}
+This creates an isolated virtual environment and installs \texttt{pygame} and \texttt{pytest}.
+
+\subsection{Running the system}
+
+Start each component in a separate terminal, in this order:
+\begin{lstlisting}
+# Terminal 1 — primary server (auto-spawns the backup)
+poetry run bomberman-server
+
+# Terminal 2 — proxy
+poetry run bomberman-proxy
+
+# Terminal 3..N — one per player
+poetry run bomberman-client
+\end{lstlisting}
+
+A match requires at least two connected clients to start.
+
+Alternatively, start each component manually in separate terminals (server first):
+\begin{lstlisting}
+# Terminal 1
+poetry run bomberman-server
+
+# Terminal 2
+poetry run bomberman-proxy
+
+# Terminal 3..N (one per player)
+poetry run bomberman-client
+\end{lstlisting}
+
+A match requires at least two connected players to start.
+
+\subsection{Port configuration}
+
+All ports are defined in \texttt{src/common/constants.py}:
+
+\begin{tabular}{ll}
+\hline
+Port & Purpose \\
+\hline
+5555 & Proxy frontend (clients connect here) \\
+5556 & Primary game server \\
+5557 & Backup state-receiver (replication) \\
+5558 & Backup game port (before promotion) \\
+5565 & Primary heartbeat responder \\
+\hline
+\end{tabular}
+
+% -----------------------------------------------------------------------
 \section{User Guide}\label{user-guide}
+% -----------------------------------------------------------------------
 
-\begin{itemize}
-  \item how to use your software?
-  %
-  \begin{itemize}
-    \item provide instructions
-    \item provide expected outcomes
-    \item provide screenshots if possible
-  \end{itemize}
-\end{itemize}
+\paragraph{Joining a game.}
+Launch a client (\texttt{poetry run bomberman-client}).
+The client connects automatically to \texttt{localhost:5555}.
+A random name is assigned.
+If a slot is available, the player enters the lobby; otherwise they enter as a spectator.
 
+\paragraph{Lobby.}
+The lobby screen shows all connected players and spectators.
+The host (the first player to join) sees a ``Start Game'' button.
+The game starts when the host presses it and at least two players are connected.
+A spectator can press \textbf{J} to request a player slot; the server converts them immediately if one is available.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/lobby.png}
+    \caption{The lobby screen with two connected players. The host is highlighted in green.}
+    \label{fig:lobby}
+\end{figure}
+
+\paragraph{Gameplay.}
+Controls: \textbf{arrow keys} to move, \textbf{Space} to place a bomb.
+Bombs explode after a fixed timer, destroying breakable blocks and damaging players within range.
+A player loses one life per explosion hit; after three hits the player is eliminated.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/gameplay.png}
+    \caption{The game screen during an active match. Players, breakable blocks, and the chat sidebar are visible.}
+    \label{fig:gameplay}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/bomb.png}
+    \caption{A bomb explosion in progress, showing the blast radius across adjacent tiles.}
+    \label{fig:bomb}
+\end{figure}
+
+\paragraph{Chat.}
+Press \textbf{T} to open the chat input, \textbf{Enter} to send, \textbf{Escape} to cancel.
+Messages are broadcast to all connected players and spectators.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/chat.png}
+    \caption{The in-game chat input active during a match.}
+    \label{fig:chat}
+\end{figure}
+
+\paragraph{End of match.}
+The last surviving player wins; if all players die simultaneously, the match is a draw.
+The victory screen displays the winner and a countdown before returning all clients to the lobby automatically.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/victory.png}
+    \caption{The victory screen showing the winner and the return-to-lobby countdown.}
+    \label{fig:victory}
+\end{figure}
+
+% -----------------------------------------------------------------------
 \section{Self-evaluation}\label{self-evaluation}
+% -----------------------------------------------------------------------
+
+\subsection{Giovanni Rinchiuso}
+
+I designed and built the \textbf{transparency layer} — the TCP proxy (\texttt{fault\_tolerance/proxy\_server.py}) and the client network layer (\texttt{network/client\_network.py}) — which hides server failover from clients entirely.
+
+The proxy intercepts the server's \texttt{join\_success} message to extract the \texttt{session\_id}, buffers outgoing client messages in \texttt{client\_buf} during failover, and sends a \texttt{RECONNECT} handshake to the new primary once it comes up.
+The key design decision was to concentrate all reconnection logic in the proxy: the client is completely unaware of failover, and the server only needs to handle a single \texttt{RECONNECT} message per session to restore a client's state.
+On the client side, I implemented the \texttt{NetworkManager}, which manages the persistent TCP connection, message framing (line-delimited JSON), and the background receive thread.
+I also developed the client MVC structure (\texttt{GameController}, \texttt{GameState}, Pygame views) and the \texttt{start.sh} deployment script, and wrote the client-side tests (\texttt{test\_game.py}, \texttt{NetworkManager} section of \texttt{test\_controller.py}).
+
+A known weakness of the proxy design is that it is itself a single point of failure: if it crashes, no client can communicate with the server regardless of the server cluster's health.
+A more robust solution would either replicate the proxy or embed a lightweight reconnection mechanism directly into the client.
+
+\subsection{Gioele Santi}
+
+I owned two areas end to end: the \textbf{fault-tolerance stack} and the \textbf{consistency layer}.
+
+The fault-tolerance side is built around four cooperating components: \texttt{FailureDetector} (heartbeat-based failure detection with a 1.5\,s timeout), \texttt{BackupServer} (state receiver, heartbeat monitor, promotion logic), \texttt{PrimaryServer} (heartbeat responder, state replication sender), and \texttt{AutoSpawner} (subprocess-based backup lifecycle management, including automatic respawn on unexpected termination).
+The heartbeat timeout and replication interval (100\,ms) were tuned through manual testing to balance detection speed against false positives under normal load.
+
+For consistency, I implemented the \texttt{GameService} service layer, which is the single component authorized to mutate game state.
+All methods are protected by a \texttt{threading.RLock} via the \texttt{@\_synchronized} decorator, ensuring that client handler threads and the game loop thread never produce concurrent writes.
+I also implemented the state codec (\texttt{state\_to\_dict} / \texttt{state\_from\_dict} in \texttt{models.py}), which is the serialisation layer used for both client broadcast and primary-to-backup replication.
+A single missing or corrupted field in the codec would silently corrupt the backup's state at promotion time, so I covered it with dedicated round-trip tests (\texttt{test\_state\_codec.py}).
+I also wrote \texttt{test\_core.py}, \texttt{test\_game\_service.py}, and the \texttt{CommandController} section of \texttt{test\_controller.py}, and implemented the server network layer (\texttt{network/server\_network.py}), the command dispatcher (\texttt{controller/command\_controller.py}), the domain model (\texttt{models.py}), and the pure game logic (\texttt{core.py}).
+
+A limitation of the current replication design is that the primary opens a new TCP connection for every snapshot (every 100\,ms), rather than maintaining a persistent replication channel.
+This is functional at the current scale but would be worth revisiting if the replication interval were reduced or the state size increased significantly.
+
+% -----------------------------------------------------------------------
+\section{Future Works}\label{future-works}
+% -----------------------------------------------------------------------
 
 \begin{itemize}
-  \item An individual section is required for each member of the group
-  \item Each member must self-evaluate their work, listing the strengths and weaknesses of the product
-  \item Each member must describe their role within the group as objectively as possible.
+    \item \textbf{Async I/O}: replace the thread-per-client model with \texttt{asyncio} to improve scalability.
+    \item \textbf{Proxy fault tolerance}: introduce a client-side reconnect mechanism or a replicated proxy to eliminate the current single point of failure at the proxy layer.
+    \item \textbf{Persistent state}: write state snapshots to disk so that a complete cluster restart can recover the last known game state.
+    \item Add collectable power-ups (increased bomb range, extra bomb, speed boost) to enrich gameplay.
+    \item Support multiple simultaneous game rooms on the same server cluster.
+    \item \textbf{Authentication}: add a simple username/password login to allow persistent scores across sessions.
+    \item Automate the failover acceptance test using subprocess management and virtual network interfaces, removing the current need for manual steps.
 \end{itemize}
-
-It should be noted that each student is only responsible for their own section.
-
-\section{Future works}\label{future-works}
-
-Discuss possible future works, improvements, extensions, optimizations, etc.
-
-Also discuss here any unimplemented feature, and how you would have implemented it.
 
 \bibliographystyle{plain}
 \bibliography{references}
