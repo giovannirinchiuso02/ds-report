@@ -98,6 +98,7 @@ Observe match & Spectator & Receive live state snapshots; no game interaction \\
 \draw (player) -- (chat.west);
 
 %% --- Spectator connections ---
+\draw (spectator) -- (join.west);
 \draw (spectator) -- (chat.west);
 \draw (spectator) -- (observe.west);
 \draw (spectator) -- (joinp.west);
@@ -111,7 +112,7 @@ Observe match & Spectator & Receive live state snapshots; no game interaction \\
 \end{figure}
 
 Players launch a client on their own machine; the client connects automatically to the proxy at a preconfigured address (default: \texttt{localhost:5555}) and is assigned a random name and a slot in the lobby.
-Once at least two players have joined, any player (the ``host'') can start the match.
+Once at least two players have joined, the host can start the match.
 Players move on a 2D grid, place bombs, and try to eliminate opponents; a player that runs out of lives is eliminated.
 Spectators can join at any time and watch the match; while in the lobby, a spectator can request to become a player by pressing J, and is promoted if a slot is available.
 The game ends when only one player remains alive (or all die simultaneously, resulting in a draw).
@@ -122,7 +123,7 @@ Distribution is the core design driver:
 \begin{itemize}
     \item \textbf{Multi-player real-time gameplay} requires clients on different machines to share a consistent, up-to-date view of the game state.
     \item \textbf{Authoritative server} centralises game logic, preventing clients from cheating and ensuring consistency.
-    \item \textbf{Fault tolerance} ensures that the match continues uninterrupted even if the primary server crashes: a hot standby backup takes over transparently.
+    \item \textbf{Fault tolerance}: if the primary server crashes, a hot standby backup takes over automatically; clients experience a brief pause but do not need to reconnect manually.
 \end{itemize}
 
 % -----------------------------------------------------------------------
@@ -148,8 +149,7 @@ Distribution is the core design driver:
     \item[\textbf{NF1}] \textbf{Fault tolerance}: the system shall continue operating if the primary server crashes; clients shall not need to manually reconnect.
     \item[\textbf{NF2}] \textbf{Consistency}: all clients shall observe the same game state; the server is the single source of truth.
     \item[\textbf{NF3}] \textbf{Latency}: the game loop shall tick every 100\,ms; the state broadcast interval shall not exceed 100\,ms.
-    \item[\textbf{NF4}] \textbf{Transparency}: clients shall be unaware of the primary/backup topology; failover shall be invisible from the client's perspective.
-    \item[\textbf{NF5}] \textbf{Failover reconnect}: after a server failover, the proxy shall transparently restore all active client sessions to the new primary without requiring manual reconnection.
+    \item[\textbf{NF4}] \textbf{Transparency}: clients shall be unaware of the primary/backup topology; after a failover, the proxy shall restore all active client sessions to the new primary without requiring manual reconnection.
 \end{enumerate}
 
 
@@ -174,23 +174,10 @@ One limitation worth noting is that the backup may hold a snapshot up to 100\,ms
 \paragraph{Performance and concurrency.}
 The server uses one thread per client connection plus a dedicated game-loop thread.
 State is broadcast to all clients every 100\,ms, which is adequate for a LAN setting with a small number of players.
-The thread-per-client model is simple but does not scale beyond a few dozen connections; this is acceptable given the four-player limit.
 
-\paragraph{Scalability.}
-The system is intentionally limited in scale: at most four players by game design, with an unbounded number of spectators in principle but constrained in practice by server resources.
-No horizontal scaling is implemented or required for the target use case.
-
-\paragraph{Resource sharing.}
-All clients share a single \texttt{GameService} instance on the server, which holds the authoritative game state.
-The proxy acts as a single entry point, concentrating all client traffic through one well-known address.
-
-\paragraph{Openness.}
-Communication uses TCP with line-delimited JSON payloads, both widely supported and human-readable.
-The message schema is defined in \texttt{src/common/constants.py}; any client implementing that schema can connect to the server, independent of language or platform.
-
-\paragraph{Evolvability.}
-State snapshots carry a \texttt{"version"} field so that incompatible schema changes can be detected at runtime.
-The separation into three independent processes (server, proxy, client) with JSON as the interface means components can be replaced or updated without affecting the others, within the constraints of the current protocol.
+\paragraph{Openness and evolvability.}
+Communication uses TCP with line-delimited JSON, a deliberately simple protocol defined in \texttt{src/common/constants.py}.
+State snapshots carry a \texttt{"version"} field so that incompatible schema changes can be detected at runtime, and the three-process boundary means components can be updated independently within the constraints of the current protocol.
 
 \paragraph{Security.}
 No authentication or encryption is implemented.
@@ -340,7 +327,8 @@ Figure~\ref{fig:classes} shows the key domain classes and their relationships. S
 \node[cls] (PL) at (9.0, 1.2) {
   \centering\textbf{Player}
   \nodepart{two}
-  id, name : str\\
+  id : int\\
+  name : str\\
   x, y : int\\
   lives : int\\
   session\_id : str\\
@@ -484,9 +472,9 @@ Figure~\ref{fig:components} shows the main classes and their relationships.
 \node[compc]  (VV) at (\rx+\cx,-2.0)     {VictoryView};
 \draw[arr] (GC.south) -- (GM.north);
 \draw[arr] (GC.south) -- (CN.north);
-\draw[arr] (GM.south) -- (LV.north);
+\draw[arr] (GC.south) -- (LV.north);
 \draw[arr] (GC.south) -- (GV.north);
-\draw[arr] (CN.south) -- (VV.north);
+\draw[arr] (GC.south) -- (VV.north);
 \begin{pgfonlayer}{background}
   \node[grp, fit=(ch)(GC)(GM)(CN)(LV)(GV)(VV)] {};
 \end{pgfonlayer}
@@ -502,7 +490,7 @@ Clients receive a serialised projection of the state at each tick; they never mu
 The \texttt{State} is serialised to a versioned JSON dictionary for both client broadcast and replication.
 
 \paragraph{Messages.}
-Two classes of messages are exchanged:
+Three classes of messages are exchanged:
 \begin{itemize}
     \item \textbf{Commands} (client $\to$ server): \texttt{MOVE:\{direction\}}, \texttt{BOMB}, \texttt{START\_GAME}, \texttt{JOIN\_GAME} (spectator requests player slot), \texttt{CHAT:\{message\}}.
     \item \textbf{State snapshots} (server $\to$ client): full JSON serialisation of the current state, sent every 100\,ms.
@@ -848,7 +836,7 @@ The system is implemented in \textbf{Python 3.10+} \citep{python}, using only th
 The graphical client is built with \textbf{Pygame 2.5} \citep{pygame}, chosen for its suitability for real-time 2D rendering and its straightforward event loop.
 Inter-component communication uses \textbf{JSON over TCP}, a deliberate choice over binary formats for human-readability and ease of debugging.
 The project is packaged with \textbf{Poetry} \citep{poetry} for reproducible dependency management, with entry points \texttt{bomberman-server}, \texttt{bomberman-proxy}, and \texttt{bomberman-client}.
-The test suite is written with \textbf{pytest} \citep{pytest}.
+The test suite is written with Python's \textbf{unittest} framework and run with \textbf{pytest} \citep{pytest}.
 Session IDs are generated using \textbf{UUID4} from the standard library.
 
 \paragraph{Network protocol.}
@@ -927,10 +915,10 @@ These tests directly validate the correctness of the replication payload sent fr
 Manual end-to-end testing was performed to validate the fault-tolerance behaviour:
 
 \begin{enumerate}
-    \item Start server, proxy, and two clients using \texttt{bash start.sh}.
+    \item Start server, proxy, and two clients as described in the Deployment section.
     \item Start a match; verify real-time state synchronisation across clients.
-    \item Identify the primary server PID via \texttt{netstat -ano | grep 5556}.
-    \item Kill the primary with \texttt{taskkill /PID \{pid\} /F}.
+    \item Identify the primary server PID via \texttt{netstat -ano | findstr 5556} (Windows) or \texttt{ss -tlnp | grep 5556} (Linux/macOS).
+    \item Kill the primary with \texttt{taskkill /PID \{pid\} /F} (Windows) or \texttt{kill \{pid\}} (Linux/macOS).
     \item Observe: the backup promotes itself (new PID appears on port 5556), clients remain connected, and the match continues without returning to the lobby.
     \item Repeat the kill on the newly promoted primary to verify that a second failover completes correctly.
 \end{enumerate}
@@ -940,6 +928,11 @@ Manual testing was necessary for the failover scenario because it requires OS-le
 % -----------------------------------------------------------------------
 \section{Deployment}\label{deployment}
 % -----------------------------------------------------------------------
+
+The source code is available at:
+\begin{center}
+\url{https://github.com/Saint138/Distributed-Bomberman}
+\end{center}
 
 \subsection{Prerequisites}
 
@@ -960,31 +953,17 @@ This creates an isolated virtual environment and installs \texttt{pygame} and \t
 
 Start each component in a separate terminal, in this order:
 \begin{lstlisting}
-# Terminal 1 — primary server (auto-spawns the backup)
+# Terminal 1 - primary server (auto-spawns the backup)
 poetry run bomberman-server
 
-# Terminal 2 — proxy
+# Terminal 2 - proxy
 poetry run bomberman-proxy
 
-# Terminal 3..N — one per player
+# Terminal 3..N - one per player
 poetry run bomberman-client
 \end{lstlisting}
 
 A match requires at least two connected clients to start.
-
-Alternatively, start each component manually in separate terminals (server first):
-\begin{lstlisting}
-# Terminal 1
-poetry run bomberman-server
-
-# Terminal 2
-poetry run bomberman-proxy
-
-# Terminal 3..N (one per player)
-poetry run bomberman-client
-\end{lstlisting}
-
-A match requires at least two connected players to start.
 
 \subsection{Port configuration}
 
@@ -1072,31 +1051,33 @@ The victory screen displays the winner and a countdown before returning all clie
 
 \subsection{Giovanni Rinchiuso}
 
-I designed and built the \textbf{transparency layer} — the TCP proxy (\texttt{fault\_tolerance/proxy\_server.py}) and the client network layer (\texttt{network/client\_network.py}) — which hides server failover from clients entirely.
+My contributions span three areas: the \textbf{fault-tolerance infrastructure}, the \textbf{transparency layer}, and the \textbf{client} with its test suite.
 
-The proxy intercepts the server's \texttt{join\_success} message to extract the \texttt{session\_id}, buffers outgoing client messages in \texttt{client\_buf} during failover, and sends a \texttt{RECONNECT} handshake to the new primary once it comes up.
-The key design decision was to concentrate all reconnection logic in the proxy: the client is completely unaware of failover, and the server only needs to handle a single \texttt{RECONNECT} message per session to restore a client's state.
-On the client side, I implemented the \texttt{NetworkManager}, which manages the persistent TCP connection, message framing (line-delimited JSON), and the background receive thread.
-I also developed the client MVC structure (\texttt{GameController}, \texttt{GameState}, Pygame views) and the \texttt{start.sh} deployment script, and wrote the client-side tests (\texttt{test\_game.py}, \texttt{NetworkManager} section of \texttt{test\_controller.py}).
-
-A known weakness of the proxy design is that it is itself a single point of failure: if it crashes, no client can communicate with the server regardless of the server cluster's health.
-A more robust solution would either replicate the proxy or embed a lightweight reconnection mechanism directly into the client.
-
-\subsection{Gioele Santi}
-
-I owned two areas end to end: the \textbf{fault-tolerance stack} and the \textbf{consistency layer}.
-
-The fault-tolerance side is built around four cooperating components: \texttt{FailureDetector} (heartbeat-based failure detection with a 1.5\,s timeout), \texttt{BackupServer} (state receiver, heartbeat monitor, promotion logic), \texttt{PrimaryServer} (heartbeat responder, state replication sender), and \texttt{AutoSpawner} (subprocess-based backup lifecycle management, including automatic respawn on unexpected termination).
+For fault tolerance, I designed and implemented the full primary/backup stack from scratch: \texttt{FailureDetector} (heartbeat-based failure detection with a 1.5\,s timeout), \texttt{BackupServer} (state receiver, heartbeat monitor, promotion logic), \texttt{PrimaryServer} (heartbeat responder, state replication sender), and \texttt{AutoSpawner} (subprocess-based backup lifecycle management with automatic respawn on unexpected termination).
 The heartbeat timeout and replication interval (100\,ms) were tuned through manual testing to balance detection speed against false positives under normal load.
 
-For consistency, I implemented the \texttt{GameService} service layer, which is the single component authorized to mutate game state.
-All methods are protected by a \texttt{threading.RLock} via the \texttt{@\_synchronized} decorator, ensuring that client handler threads and the game loop thread never produce concurrent writes.
-I also implemented the state codec (\texttt{state\_to\_dict} / \texttt{state\_from\_dict} in \texttt{models.py}), which is the serialisation layer used for both client broadcast and primary-to-backup replication.
-A single missing or corrupted field in the codec would silently corrupt the backup's state at promotion time, so I covered it with dedicated round-trip tests (\texttt{test\_state\_codec.py}).
-I also wrote \texttt{test\_core.py}, \texttt{test\_game\_service.py}, and the \texttt{CommandController} section of \texttt{test\_controller.py}, and implemented the server network layer (\texttt{network/server\_network.py}), the command dispatcher (\texttt{controller/command\_controller.py}), the domain model (\texttt{models.py}), and the pure game logic (\texttt{core.py}).
+The transparency layer is the TCP proxy (\texttt{fault\_tolerance/proxy\_server.py}), which hides the primary/backup topology from clients entirely.
+The proxy intercepts the server's \texttt{join\_success} message to extract the \texttt{session\_id}, buffers outgoing client messages in \texttt{client\_buf} during failover, and sends a \texttt{RECONNECT} handshake to the new primary once it comes up.
+A known weakness is that the proxy is itself a single point of failure: a crash severs all client connections even if the server cluster is healthy.
+This is a deliberate trade-off — unlike the primary, the proxy holds no game state, so a crash does not lose match data — but eliminating it would require either replicating the proxy or embedding reconnection logic in the client.
+
+On the client side, I built the entire Pygame application: the MVC structure (\texttt{GameController}, \texttt{GameState}, views for lobby, game, and victory), the \texttt{NetworkManager} (TCP connection, line-delimited JSON framing, background receive thread), and all graphical rendering.
+I also wrote the automated test suite: \texttt{test\_core.py} (17 tests), \texttt{test\_game.py} (31 tests), \texttt{test\_controller.py} (28 tests), and \texttt{test\_game\_service.py} (19 tests).
 
 A limitation of the current replication design is that the primary opens a new TCP connection for every snapshot (every 100\,ms), rather than maintaining a persistent replication channel.
 This is functional at the current scale but would be worth revisiting if the replication interval were reduced or the state size increased significantly.
+
+\subsection{Gioele Santi}
+
+My contributions are the \textbf{server game logic} and the \textbf{consistency layer}.
+
+I built the authoritative game engine from scratch: map generation with destructible blocks and safe spawn zones, bomb placement and explosion propagation (cross-shaped blast, radius 2), player lifecycle management (join, disconnect, timeout-based removal), the lobby/playing/victory state machine, and the spectator system.
+This logic was developed incrementally across the server's early history and later refactored into the \texttt{core.py} / \texttt{game.py} / \texttt{models.py} structure.
+
+For consistency, I implemented the \texttt{GameService} service layer — the single component authorised to mutate game state — protecting all methods with a \texttt{threading.RLock} via the \texttt{@\_synchronized} decorator.
+This ensures that client handler threads and the game loop thread never produce concurrent writes.
+I also implemented the state codec (\texttt{state\_to\_dict} / \texttt{state\_from\_dict} in \texttt{models.py}), which is the serialisation layer used for both client broadcast and primary-to-backup replication.
+A single missing or corrupted field would silently corrupt the backup's state at promotion time, so I covered it with dedicated round-trip tests (\texttt{test\_state\_codec.py}).
 
 % -----------------------------------------------------------------------
 \section{Future Works}\label{future-works}
