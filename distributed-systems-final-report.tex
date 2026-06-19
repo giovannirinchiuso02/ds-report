@@ -6,6 +6,7 @@
 \usepackage{graphicx}
 \usepackage{listings}
 \usepackage{xcolor}
+\usepackage{float}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, calc, fit, backgrounds, shapes.geometric, shapes.multipart}
 \usepackage{cleveref} % this must be the last package to be loaded
@@ -997,7 +998,7 @@ The host (the first player to join) sees a ``Start Game'' button.
 The game starts when the host presses it and at least two players are connected.
 A spectator can press \textbf{J} to request a player slot; the server converts them immediately if one is available.
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{figures/lobby.png}
     \caption{The lobby screen with two connected players. The host is highlighted in green.}
@@ -1009,14 +1010,14 @@ Controls: \textbf{arrow keys} to move, \textbf{Space} to place a bomb.
 Bombs explode after a fixed timer, destroying breakable blocks and damaging players within range.
 A player loses one life per explosion hit; after three hits the player is eliminated.
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{figures/gameplay.png}
     \caption{The game screen during an active match. Players, breakable blocks, and the chat sidebar are visible.}
     \label{fig:gameplay}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{figures/bomb.png}
     \caption{A bomb explosion in progress, showing the blast radius across adjacent tiles.}
@@ -1027,7 +1028,7 @@ A player loses one life per explosion hit; after three hits the player is elimin
 Press \textbf{T} to open the chat input, \textbf{Enter} to send, \textbf{Escape} to cancel.
 Messages are broadcast to all connected players and spectators.
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{figures/chat.png}
     \caption{The in-game chat input active during a match.}
@@ -1038,7 +1039,7 @@ Messages are broadcast to all connected players and spectators.
 The last surviving player wins; if all players die simultaneously, the match is a draw.
 The victory screen displays the winner and a countdown before returning all clients to the lobby automatically.
 
-\begin{figure}[h]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{figures/victory.png}
     \caption{The victory screen showing the winner and the return-to-lobby countdown.}
