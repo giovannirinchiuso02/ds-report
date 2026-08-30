@@ -39,6 +39,10 @@
 Distributed Bomberman is a real-time, fault-tolerant, multiplayer game inspired by the classic Bomberman arcade title, developed as a project for the Distributed Systems course at the University of Bologna (A.Y.\ 2024/25). Up to four players compete simultaneously on a shared grid, placing bombs to eliminate opponents. An unlimited number of spectators can observe the match and may request to join as a player when a slot becomes available. The system is built on an authoritative client-server architecture fronted by a session-aware TCP proxy, which hides a primary/backup server pair from clients. State is continuously replicated from the primary to the backup; on primary failure, the backup promotes itself automatically, re-binds the game port, and client sessions are restored transparently by the proxy. The entire system is implemented in Python~3 using the standard library for networking and Pygame for the graphical client.
 \end{abstract}
 
+\newpage
+\tableofcontents
+\newpage
+
 % -----------------------------------------------------------------------
 \section{Concept}\label{concept}
 % -----------------------------------------------------------------------
@@ -178,7 +182,9 @@ The server uses one thread per client connection plus a dedicated game-loop thre
 State is broadcast to all clients every 100\,ms, which is adequate for a LAN setting with a small number of players.
 
 \paragraph{Openness and evolvability.}
-Communication uses TCP with line-delimited JSON, a deliberately simple protocol defined in \texttt{src/common/constants.py}.
+Communication uses TCP with line-delimited JSON, a deliberately simple protocol:
+command verbs are dispatched by \texttt{CommandController} and the shared
+parameters (ports, tick rate, map size) live in \texttt{src/common/constants.py}.
 State snapshots carry a \texttt{"version"} field so that incompatible schema changes can be detected at runtime, and the three-process boundary means components can be updated independently within the constraints of the current protocol.
 
 \paragraph{Security.}
@@ -328,9 +334,13 @@ snapshot alone, so a partial projection would be insufficient.
 \paragraph{Messages.}
 Three classes of messages are exchanged:
 \begin{itemize}
-    \item \textbf{Commands} (client $\to$ server): \texttt{MOVE:\{direction\}}, \texttt{BOMB}, \texttt{START\_GAME}, \texttt{JOIN\_GAME} (spectator requests player slot), \texttt{CHAT:\{message\}}.
-    \item \textbf{State snapshots} (server $\to$ client): full JSON serialisation of the current state, sent every 100\,ms.
-    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (proxy $\to$ server post-failover), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
+    \item \textbf{Commands} (client $\to$ server): \texttt{UP}, \texttt{DOWN},
+    \texttt{LEFT}, \texttt{RIGHT} (movement), \texttt{BOMB},
+    \texttt{START\_GAME}, \texttt{PLAY\_AGAIN}, \texttt{JOIN\_GAME} (spectator
+    requests a player slot), \texttt{CHAT:\{message\}}, \texttt{PING}.
+    Commands are case-insensitive and newline-terminated.    
+    \item \textbf{State snapshots} (server $\to$ client): the JSON projection of
+    the current state described above, sent every 100\,ms.    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (proxy $\to$ server post-failover), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
 \end{itemize}
 
 \subsection{Interaction}\label{interaction}
@@ -348,8 +358,8 @@ The trade-off is that the server becomes a bandwidth bottleneck for state broadc
 
 \paragraph{Communication model.}
 All messages are serialised as \textbf{line-delimited JSON} over persistent TCP connections (one connection per client, kept open for the entire session).
-The server operates in a \textbf{publish-subscribe} style for state updates: after each game tick it pushes a full state snapshot to all connected clients simultaneously, without waiting for a request.
-Client-to-server commands follow a \textbf{fire-and-forget} pattern: the client sends a command (e.g.\ \texttt{MOVE:UP}) and immediately continues; the effect appears in the next state broadcast.
+The server operates in a \textbf{publish-subscribe} style for state updates: after each game tick it pushes a state snapshot to all connected clients simultaneously, without waiting for a request.
+Client-to-server commands follow a \textbf{fire-and-forget} pattern: the client sends a command (e.g.\ \texttt{UP}) and immediately continues; the effect appears in the next state broadcast.
 
 \paragraph{Join sequence.}
 Figure~\ref{fig:seq-join} shows the message flow when a client connects.
@@ -402,9 +412,9 @@ Figure~\ref{fig:seq-start} shows the message flow when the host starts the match
 \draw[ret] (\xS,-3.3) -- node[lbl, above]{state \{phase: PLAYING\}} (\xP,-3.3);
 \draw[ret] (\xP,-3.7) -- node[lbl, above]{state (forwarded)} (\xC,-3.7);
 
-%% 4. MOVE
-\draw[msg] (\xC,-4.5) -- node[lbl, above]{MOVE:RIGHT} (\xP,-4.5);
-\draw[msg] (\xP,-4.9) -- node[lbl, above]{MOVE:RIGHT} (\xS,-4.9);
+%% 4. movement command
+\draw[msg] (\xC,-4.5) -- node[lbl, above]{RIGHT} (\xP,-4.5);
+\draw[msg] (\xP,-4.9) -- node[lbl, above]{RIGHT} (\xS,-4.9);
 \end{tikzpicture}
 \caption{Game-start sequence diagram.}
 \label{fig:seq-start}
@@ -477,7 +487,7 @@ Each tick:
     \item Decrement explosion display timers; remove expired explosions.
     \item Check victory conditions.
     \item If in the victory phase, decrement the return-to-lobby timer.
-    \item Broadcast the full state to all connected clients and spectators.
+    \item Broadcast the current state projection to all connected clients and spectators.
 \end{enumerate}
 
 \paragraph{Client reactive behaviour.}
@@ -550,8 +560,6 @@ It does not perform load balancing (there is only one active server at any time)
 
 There is no caching layer: clients always receive a fresh state broadcast every 100\,ms.
 
-In the case of a network partition between the proxy and the primary (but not between the backup and the proxy), the backup would be promoted and take over. Full partition handling beyond this scenario is outside the scope of the project.
-
 \paragraph{CAP theorem analysis.}
 In the CAP theorem framework, a distributed system can guarantee at most two of
 \textbf{Consistency}, \textbf{Availability}, and \textbf{Partition tolerance}.
@@ -596,11 +604,11 @@ considered out of scope.
 
 \subsection{Technology Stack}
 
-The system is implemented in \textbf{Python 3.10+} \citep{python}, using only the standard library for networking (\texttt{socket}, \texttt{threading}, \texttt{json}).
-The graphical client is built with \textbf{Pygame 2.5} \citep{pygame}, chosen for its suitability for real-time 2D rendering and its straightforward event loop.
+The system is implemented in \textbf{Python 3.10+}, using only the standard library for networking (\texttt{socket}, \texttt{threading}, \texttt{json}).
+The graphical client is built with \textbf{Pygame 2.5}, chosen for its suitability for real-time 2D rendering and its straightforward event loop.
 Inter-component communication uses \textbf{JSON over TCP}, a deliberate choice over binary formats for human-readability and ease of debugging.
-The project is packaged with \textbf{Poetry} \citep{poetry} for reproducible dependency management, with entry points \texttt{bomberman-server}, \texttt{bomberman-proxy}, and \texttt{bomberman-client}.
-The test suite is written with Python's \textbf{unittest} framework and run with \textbf{pytest} \citep{pytest}.
+The project is packaged with \textbf{Poetry}  for reproducible dependency management, with entry points \texttt{bomberman-server}, \texttt{bomberman-proxy}, and \texttt{bomberman-client}.
+The test suite is written with Python's \textbf{unittest} framework and run with \textbf{pytest}.
 Session IDs are generated using \textbf{UUID4} from the standard library.
 
 \paragraph{Network protocol.}
@@ -848,8 +856,9 @@ A known weakness is that the proxy is itself a single point of failure: a crash 
 This is a deliberate trade-off — unlike the primary, the proxy holds no game state, so a crash does not lose match data — but eliminating it would require either replicating the proxy or embedding reconnection logic in the client.
 
 On the client side, I built the entire Pygame application: the MVC structure (\texttt{GameController}, \texttt{GameState}, views for lobby, game, and victory), the \texttt{NetworkManager} (TCP connection, line-delimited JSON framing, background receive thread), and all graphical rendering.
-I also wrote the automated test suite: \texttt{test\_core.py} (17 tests), \texttt{test\_game.py} (31 tests), \texttt{test\_controller.py} (28 tests), and \texttt{test\_game\_service.py} (19 tests).
-
+I also wrote the bulk of the automated test suite: \texttt{test\_core.py},
+\texttt{test\_game.py} (31 tests), \texttt{test\_controller.py} (28 tests), and
+\texttt{test\_game\_service.py} (19 tests).
 A limitation of the current replication design is that the primary opens a new TCP connection for every snapshot (every 100\,ms), rather than maintaining a persistent replication channel.
 This is functional at the current scale but would be worth revisiting if the replication interval were reduced or the state size increased significantly.
 
@@ -906,9 +915,10 @@ require a per-player grace timer driven by the game loop.
     \item Support multiple simultaneous game rooms on the same server cluster.
     \item \textbf{Authentication}: add a simple username/password login to allow persistent scores across sessions.
     \item Automate the failover acceptance test using subprocess management and virtual network interfaces, removing the current need for manual steps.
+    \item \textbf{Process lifecycle}: the backup is spawned as a child process but
+    is not reaped when the primary terminates abnormally, so orphaned backups can
+    survive and keep their ports bound. Placing the cluster in a process group, or
+    supervising it with a dedicated launcher, would make shutdown deterministic.
 \end{itemize}
-
-\bibliographystyle{plain}
-\bibliography{references}
 
 \end{document}
