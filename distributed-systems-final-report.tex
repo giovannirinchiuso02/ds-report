@@ -170,7 +170,7 @@ The mechanism is straightforward and sufficient for the two-node, single-failure
 \paragraph{Transparency.}
 Clients connect to a fixed proxy address and are unaware of the primary/backup topology (location and replication transparency).
 During a failover, the proxy buffers incoming client data and flushes it once the new primary is reachable, making the switchover invisible to clients.
-This is a limited form of failover transparency: it works well for short outages, but the proxy has a configurable timeout (30\,s) beyond which client connections are dropped.
+This is a limited form of failover transparency: it works well for short outages, but the proxy enforces a 30\,s timeout (\texttt{TCPProxy.FAILOVER\_TIMEOUT}) beyond which client connections are dropped.
 
 \paragraph{Consistency.}
 The authoritative server pattern provides a simple consistency model: only the server mutates game state, and clients are pure renderers.
@@ -302,7 +302,7 @@ Figure~\ref{fig:classes} shows the key domain classes and their relationships. S
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.8\textwidth]{figures/UML1.png}
+    \includegraphics[width=0.8\textwidth]{figures/UMLUno.png}
     \caption{Domain class diagram of Distributed Bomberman.}
     \label{fig:classes}
 \end{figure}
@@ -312,7 +312,7 @@ Figure~\ref{fig:components} shows the main components of the four processes and 
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.6\textwidth]{figures/uml2.png}
+    \includegraphics[width=0.95\textwidth]{figures/UMLDue.png}
     \caption{Component overview of Distributed Bomberman.}
     \label{fig:components}
 \end{figure}
@@ -337,8 +337,10 @@ Three classes of messages are exchanged:
     \item \textbf{Commands} (client $\to$ server): \texttt{UP}, \texttt{DOWN},
     \texttt{LEFT}, \texttt{RIGHT} (movement), \texttt{BOMB},
     \texttt{START\_GAME}, \texttt{PLAY\_AGAIN}, \texttt{JOIN\_GAME} (spectator
-    requests a player slot), \texttt{CHAT:\{message\}}, \texttt{PING}.
-    Commands are case-insensitive and newline-terminated.    
+    requests a player slot), \texttt{CHAT:\{message\}}. The server also accepts
+    a \texttt{PING} command for manual connectivity checks (e.g.\ over
+    \texttt{netcat}); the graphical client never sends it.
+    Commands are case-insensitive and newline-terminated.
     \item \textbf{State snapshots} (server $\to$ client): the JSON projection of
     the current state described above, sent every 100\,ms.    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (proxy $\to$ server post-failover), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
 \end{itemize}
@@ -366,7 +368,7 @@ Figure~\ref{fig:seq-join} shows the message flow when a client connects.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.7\textwidth]{figures/uml3.png}
+    \includegraphics[width=0.7\textwidth]{figures/UMLTre.png}
     \caption{Join and normal operation sequence diagram.}
     \label{fig:seq-join}
 \end{figure}
@@ -425,7 +427,7 @@ Figure~\ref{fig:seq-failover} shows the message flow during a primary server fai
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.6\textwidth]{figures/uml4.png}
+    \includegraphics[width=0.6\textwidth]{figures/UMLQuattro.png}
     \caption{Failover sequence diagram.}
     \label{fig:seq-failover}
 \end{figure}
@@ -493,7 +495,7 @@ Each tick:
 \paragraph{Client reactive behaviour.}
 The client does not implement its own state machine.
 Instead it behaves as a \textbf{reactive consumer}: it renders whatever state the server broadcasts.
-The \texttt{GameController} inspects the \texttt{phase} field of each received snapshot and switches the active view accordingly:
+The \texttt{GameState} model inspects the \texttt{game\_state} field of each received snapshot and updates \texttt{current\_screen} accordingly; the main loop then switches the active view:
 \begin{itemize}
   \item \texttt{lobby} $\Rightarrow$ \texttt{LobbyView}: displays connected players, spectators, and the ``Start Game'' button (host only).
   \item \texttt{playing} $\Rightarrow$ \texttt{GameView}: renders the grid, players, bombs, and explosions in real time.
@@ -647,11 +649,11 @@ The client is structured following the \textbf{Model-View-Controller} pattern:
     \item \textbf{Model} (\texttt{GameState}): holds the last received state snapshot.
     \item \textbf{View} (\texttt{LobbyView}, \texttt{GameView}, \texttt{VictoryView}, \ldots): renders the current screen using Pygame.
     \item \textbf{Controller} (\texttt{GameController}): translates keyboard input into server commands.
-    \item \textbf{Network} (\texttt{ClientNetwork}): handles the TCP connection and message framing in a background thread.
+    \item \textbf{Network} (\texttt{NetworkManager}): handles the TCP connection and message framing in a background thread.
 \end{itemize}
 
 The MVC separation means that the client's rendering logic is completely decoupled from the network layer.
-When the \texttt{ClientNetwork} thread receives a new state snapshot, it updates the \texttt{GameState} model; the Pygame main loop then re-renders whatever the model currently holds.
+When the \texttt{NetworkManager} thread receives a new state snapshot, it updates the \texttt{GameState} model; the Pygame main loop then re-renders whatever the model currently holds.
 This design also simplifies the failover scenario on the client side: since the client has no concept of ``which server'' it is connected to, a transparent reconnect by the proxy requires zero client-side changes.
 
 \paragraph{Proxy implementation.}
