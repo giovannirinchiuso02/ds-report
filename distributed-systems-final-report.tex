@@ -47,7 +47,7 @@ Distributed Bomberman is a real-time, fault-tolerant, multiplayer game inspired 
 \section{Concept}\label{concept}
 % -----------------------------------------------------------------------
 
-Distributed Bomberman is a system consisting of three cooperating processes: a game server, a transparent TCP proxy, and a Pygame graphical client.
+Distributed Bomberman is a system consisting of three kinds of cooperating process: a game server (deployed as a primary and a hot-standby backup), a transparent TCP proxy, and a Pygame graphical client.
 
 \paragraph{Use cases.}
 The main actors are the \textbf{Player}, the \textbf{Spectator}, and the \textbf{Host} (the first player to join, a special role assigned automatically).
@@ -61,7 +61,7 @@ Table~\ref{tab:usecases} summarises the principal use cases.
 \textbf{Use case} & \textbf{Actor} & \textbf{Description} \\
 \hline
 Join lobby & Player / Spectator & Connect, receive assigned name, enter lobby or spectator queue \\
-Start game & Host & Press ``Start Game'' when $\geq 2$ players are connected \\
+Start game & Host & Press Enter in the lobby when $\geq 2$ players are connected \\
 Move & Player & Send directional command; server updates position \\
 Place bomb & Player & Place bomb at current tile; server handles detonation \\
 Send chat & Player / Spectator & Broadcast a text message to all participants \\
@@ -259,7 +259,7 @@ The following alternatives were discarded in favour of the chosen design:
 Three process types are required to run the system; all can run on the same machine or on separate machines on the same LAN:
 
 \begin{itemize}
-    \item \textbf{Server cluster} ($1 + 1$ instances): one active \emph{primary} server (port~5556) and one \emph{backup} server, which uses two ports: 5557 for receiving state snapshots (\texttt{BACKUP\_STATE\_PORT}) and 5558 as its own game port before promotion (\texttt{BACKUP\_GAME\_PORT}). Only the primary hosts the live \texttt{GameService} and accepts client connections; the backup runs in passive monitoring mode, receiving periodic state snapshots and waiting to be promoted. The primary automatically spawns the backup at startup via the \texttt{AutoSpawner} component; each newly promoted backup spawns a new one, maintaining fault tolerance continuously.
+    \item \textbf{Server cluster} ($1 + 1$ instances): one active \emph{primary} server (port~5556) and one \emph{backup} server, which listens on port 5557 for incoming state snapshots (\texttt{BACKUP\_STATE\_PORT}) and, on promotion, re-opens the game socket on the primary's own port 5556, so that the proxy finds the new primary at the fixed backend address it already uses. Only the primary hosts the live \texttt{GameService} and accepts client connections; the backup runs in passive monitoring mode, receiving periodic state snapshots and waiting to be promoted. The primary automatically spawns the backup at startup via the \texttt{AutoSpawner} component; each newly promoted backup spawns a new one, maintaining fault tolerance continuously.
 
     \item \textbf{TCP proxy} (port 5555): a transparent relay that hides the primary/backup topology from clients. It forwards data in both directions, captures per-client \texttt{session\_id}s from the server's join acknowledgements, and manages failover transparently by buffering client data and sending \texttt{RECONNECT} handshakes to the new primary.
 
@@ -302,7 +302,7 @@ Figure~\ref{fig:classes} shows the key domain classes and their relationships. S
 \end{figure}
 
 \paragraph{Component overview.}
-Figure~\ref{fig:components} shows the main components of the four processes and the channels connecting them.
+Figure~\ref{fig:components} shows the main components of the four running processes --- proxy, primary, backup and client --- and the channels connecting them.
 
 \begin{figure}[H]
     \centering
@@ -450,10 +450,11 @@ A countdown runs (the ``return to lobby'' timer); when it expires, the state is 
 The server runs a fixed-rate game loop at 10\,Hz (100\,ms per tick).
 Each tick:
 \begin{enumerate}
-    \item Decrement bomb timers; detonate expired bombs, compute explosion cells, reduce player lives.
+    \item If the phase is \texttt{victory}, decrement the return-to-lobby timer and skip the rest of the tick.
+    \item Decrement bomb timers; detonate expired bombs, compute explosion cells, destroy the blocks they reach and reduce player lives.
     \item Decrement explosion display timers; remove expired explosions.
-    \item Check victory conditions.
-    \item If in the victory phase, decrement the return-to-lobby timer.
+    \item Check the victory condition; if it is met, stop here.
+    \item Decrement the block-regeneration timer; when it expires, place a new destructible block on a safe tile and re-arm the timer with a random interval.
     \item Broadcast the current state projection to all connected clients and spectators.
 \end{enumerate}
 
@@ -462,7 +463,7 @@ The client does not implement its own state machine.
 Instead it behaves as a \textbf{reactive consumer}: it renders whatever state the server broadcasts.
 The \texttt{GameState} model inspects the \texttt{game\_state} field of each received snapshot and updates \texttt{current\_screen} accordingly; the main loop then switches the active view:
 \begin{itemize}
-  \item \texttt{lobby} $\Rightarrow$ \texttt{LobbyView}: displays connected players, spectators, and the ``Start Game'' button (host only).
+  \item \texttt{lobby} $\Rightarrow$ \texttt{LobbyView}: displays connected players, spectators, and the ``Press ENTER'' start prompt (host only).
   \item \texttt{playing} $\Rightarrow$ \texttt{GameView}: renders the grid, players, bombs, and explosions in real time.
   \item \texttt{victory} $\Rightarrow$ \texttt{VictoryView}: shows the winner (or draw) and the return-to-lobby countdown.
 \end{itemize}
@@ -762,7 +763,7 @@ Port & Purpose \\
 5555 & Proxy frontend (clients connect here) \\
 5556 & Primary game server \\
 5557 & Backup state-receiver (replication) \\
-5558 & Backup game port (before promotion) \\
+5558 & Reserved (\texttt{BACKUP\_GAME\_PORT}); not bound by the current implementation \\
 5565 & Primary heartbeat responder \\
 \hline
 \end{tabular}
@@ -779,8 +780,9 @@ If a slot is available, the player enters the lobby; otherwise they enter as a s
 
 \paragraph{Lobby.}
 The lobby screen shows all connected players and spectators.
-The host (the first player to join) sees a ``Start Game'' button.
-The game starts when the host presses it and at least two players are connected.
+The host (the first player to join) sees a ``Press ENTER'' prompt.
+The game starts when the host presses Enter with at least two players connected.
+The interface is driven entirely from the keyboard: the client handles no mouse input at all.
 A spectator can press \textbf{J} to request a player slot; the server converts them immediately if one is available.
 
 \begin{figure}[H]
@@ -794,6 +796,7 @@ A spectator can press \textbf{J} to request a player slot; the server converts t
 Controls: \textbf{arrow keys} to move, \textbf{Space} to place a bomb.
 Bombs explode after a fixed timer, destroying breakable blocks and damaging players within range.
 A player loses one life per explosion hit; after three hits the player is eliminated.
+Destroyed blocks are periodically regenerated on tiles that are safe to occupy, so the map does not grow progressively emptier over a long match.
 
 \begin{figure}[H]
     \centering
@@ -822,7 +825,7 @@ Messages are broadcast to all connected players and spectators.
 
 \paragraph{End of match.}
 The last surviving player wins; if all players die simultaneously, the match is a draw.
-The victory screen displays the winner and a countdown before returning all clients to the lobby automatically.
+The victory screen displays the winner and a countdown before returning all clients to the lobby automatically; a player can also press Enter to request a rematch immediately (\texttt{PLAY\_AGAIN}).
 
 \begin{figure}[H]
     \centering
@@ -861,9 +864,10 @@ My contributions are the \textbf{server game logic}, the \textbf{consistency
 layer}, and the \textbf{hardening of the replication path}.
 
 I built the authoritative game engine: map generation with destructible blocks
-and safe spawn zones, bomb placement and explosion propagation (cross-shaped
-blast, radius 2, with chain reactions), player lifecycle management, the
-lobby/playing/victory state machine, and the spectator system. It was later
+and safe spawn zones, bomb placement and explosion propagation (a cross-shaped
+blast of radius 2, stopped by walls and consuming the first destructible block on
+each arm), player lifecycle management, the lobby/playing/victory state machine,
+timed regeneration of destroyed blocks, and the spectator system. It was later
 refactored so that the pure game rules in \texttt{core.py} carry no networking or
 threading concern and can be unit-tested in isolation.
 
