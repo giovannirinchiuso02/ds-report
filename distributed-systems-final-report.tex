@@ -36,7 +36,7 @@
 \maketitle
 
 \begin{abstract}
-Distributed Bomberman is a real-time, fault-tolerant, multiplayer game inspired by the classic Bomberman arcade title, developed as a project for the Distributed Systems course at the University of Bologna (A.Y.\ 2024/25). Up to four players compete simultaneously on a shared grid, placing bombs to eliminate opponents. An unlimited number of spectators can observe the match and may request to join as a player when a slot becomes available. The system is built on an authoritative client-server architecture fronted by a session-aware TCP proxy, which hides a primary/backup server pair from clients. State is continuously replicated from the primary to the backup; on primary failure, the backup promotes itself automatically, re-binds the game port, and client sessions are restored transparently by the proxy. The entire system is implemented in Python~3 using the standard library for networking and Pygame for the graphical client.
+Distributed Bomberman is a real-time, fault-tolerant, multiplayer game inspired by the classic Bomberman arcade title, developed as a project for the Distributed Systems course at the University of Bologna (A.Y.\ 2024/25). Up to four players compete simultaneously on a shared grid, placing bombs to eliminate opponents. An unlimited number of spectators can observe the match and may request to join as a player when a slot becomes available. The system is built on an authoritative client-server architecture fronted by a session-aware TCP proxy, which hides a primary/backup server pair from clients. State is continuously replicated from the primary to the backup; on primary failure, the backup promotes itself automatically, re-binds the game port, and client sessions are restored transparently by the proxy; a second, independent retry loop on the client covers the failure of the proxy itself. The entire system is implemented in Python~3 using the standard library for networking and Pygame for the graphical client.
 \end{abstract}
 
 \newpage
@@ -133,7 +133,7 @@ Distribution is the core design driver:
 
 \newpage
 % -----------------------------------------------------------------------
-\section{Requirements Elicitation and Analysis}\label{requirements}
+\section{Requirements Identification and Analysis}\label{requirements}
 % -----------------------------------------------------------------------
 
 \subsection{Functional Requirements}
@@ -144,7 +144,7 @@ Distribution is the core design driver:
     \item[\textbf{F3}] While in the lobby, spectators shall be able to request to join as a player by pressing a dedicated key; the request is accepted if a player slot is currently available.
     \item[\textbf{F4}] The first player to join shall become the host and shall be able to start the game.
     \item[\textbf{F5}] Players shall be able to move on the grid and place bombs; bombs shall explode after a timer, destroying breakable blocks and damaging players in range.
-    \item[\textbf{F6}] A player who disconnects during a match shall be marked as disconnected and removed from the active game; their session can be restored transparently by the proxy in the event of a server failover.
+    \item[\textbf{F6}] A player who disconnects during a match shall be marked as disconnected and excluded from the active game; their session can be restored under the original identity --- by the proxy after a server failover, or by the client itself once it re-establishes a dropped connection.
     \item[\textbf{F7}] Players shall be able to send chat messages visible to all participants.
     \item[\textbf{F8}] The system shall declare a winner (or a draw) and return all players to the lobby automatically.
 \end{enumerate}
@@ -186,10 +186,6 @@ Communication uses TCP with line-delimited JSON, a deliberately simple protocol:
 command verbs are dispatched by \texttt{CommandController} and the shared
 parameters (ports, tick rate, map size) live in \texttt{src/common/constants.py}.
 State snapshots carry a \texttt{"version"} field so that incompatible schema changes can be detected at runtime, and the three-process boundary means components can be updated independently within the constraints of the current protocol.
-
-\paragraph{Security.}
-No authentication or encryption is implemented.
-The system is intended for use on a trusted local network; extending it to an untrusted network would require at minimum TLS and some form of client authentication.
 
 % -----------------------------------------------------------------------
 \section{Design}\label{design}
@@ -272,7 +268,6 @@ Three process types are required to run the system; all can run on the same mach
 
 \paragraph{Network distribution.}
 All components communicate over standard TCP/IP sockets on a local area network.
-The assumption of a shared LAN (or VPN) eliminates the need to handle NAT traversal or firewall traversal, which are common challenges in fully distributed systems deployed over the public Internet.
 
 \paragraph{Service discovery.}
 Components locate each other through \textbf{static port configuration} defined in \texttt{src/common/constants.py}.
@@ -282,7 +277,6 @@ This is a deliberate design choice justified by the deployment scenario:
     \item Clients always connect through the proxy at a single, well-known address; if the proxy address changes, clients simply update the one constant.
     \item A dynamic discovery mechanism (e.g.\ UDP broadcast) would add complexity without benefit for a LAN-local system with a fixed topology.
 \end{itemize}
-The trade-off is reduced flexibility for multi-site deployments, which is an acknowledged limitation noted in \cref{future-works}.
 
 \subsection{Modelling}\label{modelling}
 
@@ -342,7 +336,7 @@ Three classes of messages are exchanged:
     \texttt{netcat}); the graphical client never sends it.
     Commands are case-insensitive and newline-terminated.
     \item \textbf{State snapshots} (server $\to$ client): the JSON projection of
-    the current state described above, sent every 100\,ms.    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (proxy $\to$ server post-failover), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
+    the current state described above, sent every 100\,ms.    \item \textbf{Control messages}: \texttt{RECONNECT:\{session\_id\}} (sent to the server by the proxy after a failover, or by the client after it re-establishes a dropped connection), \texttt{HEARTBEAT} / \texttt{ALIVE} (backup $\leftrightarrow$ primary).
 \end{itemize}
 
 \subsection{Interaction}\label{interaction}
@@ -379,47 +373,11 @@ The proxy captures this session ID and uses it to send a \texttt{RECONNECT:\{ses
 \paragraph{Game-start sequence.}
 Figure~\ref{fig:seq-start} shows the message flow when the host starts the match.
 
-\begin{figure}[h]
-\centering
-\begin{tikzpicture}[font=\small, >=Stealth,
-  head/.style = {draw, minimum width=2.5cm, minimum height=0.65cm,
-                 align=center, fill=gray!15, rounded corners=3pt},
-  msg/.style  = {->, thick},
-  ret/.style  = {->, thick, dashed},
-  lbl/.style  = {font=\footnotesize, fill=white, inner sep=2pt},
-  note/.style = {font=\footnotesize\itshape}
-]
-\def\xC{0} \def\xP{4.5} \def\xS{9.0}
-\def\yTop{0} \def\yBot{-5.5}
-
-%% participant headers
-\node[head] at (\xC,\yTop) {Client (Host)};
-\node[head] at (\xP,\yTop) {Proxy};
-\node[head] at (\xS,\yTop) {Primary Server};
-
-%% lifelines
-\draw[gray!50, dashed] (\xC,-0.33) -- (\xC,\yBot);
-\draw[gray!50, dashed] (\xP,-0.33) -- (\xP,\yBot);
-\draw[gray!50, dashed] (\xS,-0.33) -- (\xS,\yBot);
-
-%% 1. START_GAME
-\draw[msg] (\xC,-1.0) -- node[lbl, above]{START\_GAME} (\xP,-1.0);
-\draw[msg] (\xP,-1.5) -- node[lbl, above]{START\_GAME} (\xS,-1.5);
-
-%% 2. server transitions, replication
-\node[note, right] at (\xS+0.15,-2.1) {[phase: LOBBY $\to$ PLAYING]};
-\node[note, right] at (\xS+0.15,-2.55) {[replicates new state to backup]};
-
-%% 3. state broadcast
-\draw[ret] (\xS,-3.3) -- node[lbl, above]{state \{phase: PLAYING\}} (\xP,-3.3);
-\draw[ret] (\xP,-3.7) -- node[lbl, above]{state (forwarded)} (\xC,-3.7);
-
-%% 4. movement command
-\draw[msg] (\xC,-4.5) -- node[lbl, above]{RIGHT} (\xP,-4.5);
-\draw[msg] (\xP,-4.9) -- node[lbl, above]{RIGHT} (\xS,-4.9);
-\end{tikzpicture}
-\caption{Game-start sequence diagram.}
-\label{fig:seq-start}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/game_start.png}
+    \caption{Game-start sequence diagram.}
+    \label{fig:seq-start}
 \end{figure}
 
 \paragraph{Failover sequence.}
@@ -427,7 +385,7 @@ Figure~\ref{fig:seq-failover} shows the message flow during a primary server fai
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.6\textwidth]{figures/UMLQuattro.png}
+    \includegraphics[width=0.6\textwidth]{figures/failover.png}
     \caption{Failover sequence diagram.}
     \label{fig:seq-failover}
 \end{figure}
@@ -475,7 +433,14 @@ A player who disconnects in the lobby is removed immediately.
 
 \textbf{PLAYING}: The game loop is active.
 Players move and place bombs; the server processes inputs, detonates bombs, computes explosions, and reduces player lives.
-A player who disconnects mid-game is marked \texttt{disconnected=True, alive=False} and cannot rejoin during normal operation. Session restoration via the \texttt{RECONNECT} handshake is triggered only by a proxy-mediated failover, not by voluntary reconnection.
+A player who disconnects mid-game is marked \texttt{disconnected=True, alive=False}, and the disconnection immediately triggers a victory check.
+Session restoration via the \texttt{RECONNECT} handshake is triggered either by the
+proxy after a primary failover, or by the client itself after it re-establishes a
+dropped connection --- provided the client process stayed alive and still holds its
+\texttt{session\_id}.
+Reattaching therefore restores the player's identity and clears the disconnected
+flag, but it does not undo a phase transition that the victory check has already
+performed.
 
 \textbf{VICTORY}: One player has survived (or all died simultaneously for a draw).
 The winner is recorded.
@@ -501,7 +466,8 @@ The \texttt{GameState} model inspects the \texttt{game\_state} field of each rec
   \item \texttt{playing} $\Rightarrow$ \texttt{GameView}: renders the grid, players, bombs, and explosions in real time.
   \item \texttt{victory} $\Rightarrow$ \texttt{VictoryView}: shows the winner (or draw) and the return-to-lobby countdown.
 \end{itemize}
-This design means the client requires zero changes to handle failover: the proxy restores the TCP stream transparently, and the next state broadcast simply resumes rendering.
+This design keeps failover handling minimal on the client: when the proxy restores the TCP stream, the next state broadcast simply resumes rendering, and no view is aware that a switchover occurred.
+The client is not entirely passive, however --- it owns the recovery path for a failure of the proxy itself, described in \cref{availability}.
 
 \subsection{Data and Consistency Issues}\label{data-and-consistency-issues}
 
@@ -541,8 +507,20 @@ It declares the primary failed if no heartbeat has been received for more than 1
 The backup polls the primary's heartbeat port (TCP, short-lived connections) every 500\,ms.
 
 \paragraph{Post-failover session restore.}
-When a player disconnects normally, the server marks them as \texttt{disconnected} and removes them from the game (immediately in the lobby; after the current tick in a running match).
-The \texttt{RECONNECT} handshake is used exclusively in the failover scenario: the proxy sends the captured \texttt{session\_id} to the new primary, which looks it up in the reconnect registry rebuilt from the replicated state and re-attaches the client without creating a duplicate player entry.
+When a player disconnects, the server removes the entry outright if the game is in
+the lobby; during a running match it keeps the entry and marks it
+\texttt{disconnected=True, alive=False}, so that there is still something to
+reattach to later.
+
+The \texttt{RECONNECT} handshake has two senders. After a primary failover the
+proxy sends the \texttt{session\_id} it captured from the original
+\texttt{join\_success}; after a dropped connection the client sends the
+\texttt{session\_id} it stored itself. In both cases the primary looks it up in the
+reconnect registry --- rebuilt from the replicated state after a promotion --- and
+re-attaches the client without creating a duplicate player entry, clearing the
+disconnected flag and restoring the player to active play. The restore is
+deliberately conservative: it acts only on a player marked \texttt{disconnected}, so
+a player eliminated in combat is never resurrected by reconnecting.
 
 \paragraph{Proxy buffering.}
 During failover the proxy keeps client-side TCP connections open and accumulates
@@ -558,7 +536,7 @@ normal forwarding resumes.
 \subsection{Availability}\label{availability}
 
 The proxy acts as a single logical entry point.
-It does not perform load balancing (there is only one active server at any time) but it hides the primary/backup switchover from clients, ensuring continuous availability.
+It does not perform load balancing (there is only one active server at any time) but it hides the primary/backup switchover from clients, so that service continues across a primary crash.
 
 There is no caching layer: clients always receive a fresh state broadcast every 100\,ms.
 
@@ -590,15 +568,26 @@ disproportionate for a two-node cluster in a single failure domain, but it is th
 principal correctness limitation of the current design.
 
 A second structural limitation is that the proxy is a \textbf{single point of
-failure}: if it crashes, or is partitioned from all clients, the service becomes
-unavailable even when both servers are healthy. This is a deliberate trade-off.
-Unlike the primary, the proxy holds no game state, so its failure severs
-connections without losing match data, and concentrating the failover logic in
-one stateless component is what keeps the client implementation free of any
-reconnection or discovery logic. Removing this limitation would require either
-replicating the proxy --- which reintroduces the same coordination problem one
-level up --- or pushing reconnection logic into the client, and both options were
-considered out of scope.
+failure} for availability: while it is down no client can reach the cluster, even
+though both servers are healthy. Its impact is partly bounded by a second and
+independent recovery layer implemented on the client: when the connection drops
+the client retries the proxy address every two seconds and, once the proxy is
+reachable again, replays the \texttt{RECONNECT:\{session\_id\}} handshake itself,
+so the primary reattaches the existing player instead of creating a new one.
+
+The two layers are not equivalent, however, and the asymmetry is instructive. A
+primary crash is invisible to clients precisely because the dying primary never
+observes the disconnection: the backup resumes from a snapshot in which every
+player is still alive. A proxy crash is different, because the primary stays alive
+and does observe every client socket closing. Each disconnection marks the player
+\texttt{disconnected} and \texttt{alive=False} and triggers a victory check, so in
+a two-player match the first drop already ends the round. The client's retry loop
+therefore preserves the \emph{session} --- players reattach under their original
+identity rather than rejoining as new ones --- but it does not preserve an
+\emph{in-progress match}. Making proxy failure fully transparent would require the
+primary to distinguish a transport failure from a player quitting, for instance by
+suspending the victory check for a grace period after a disconnection instead of
+evaluating it immediately.
 
 % -----------------------------------------------------------------------
 \section{Implementation}\label{implementation}
@@ -654,7 +643,8 @@ The client is structured following the \textbf{Model-View-Controller} pattern:
 
 The MVC separation means that the client's rendering logic is completely decoupled from the network layer.
 When the \texttt{NetworkManager} thread receives a new state snapshot, it updates the \texttt{GameState} model; the Pygame main loop then re-renders whatever the model currently holds.
-This design also simplifies the failover scenario on the client side: since the client has no concept of ``which server'' it is connected to, a transparent reconnect by the proxy requires zero client-side changes.
+This design also simplifies the failover scenario on the client side: since the client has no concept of ``which server'' it is connected to, a reconnection requires no change to the model, the views or the controller.
+Only the transport is replaced --- \texttt{BombermanClient.reconnect()} swaps in a fresh \texttt{NetworkManager}, carries the previous \texttt{session\_id} over to it and replays the \texttt{RECONNECT} handshake, leaving the Pygame window and the rendering loop untouched.
 
 \paragraph{Proxy implementation.}
 The proxy spawns one thread per client connection.
@@ -855,7 +845,8 @@ The heartbeat timeout and replication interval (100\,ms) were tuned through manu
 The transparency layer is the TCP proxy (\texttt{fault\_tolerance/proxy\_server.py}), which hides the primary/backup topology from clients entirely.
 The proxy intercepts the server's \texttt{join\_success} message to extract the \texttt{session\_id}, buffers outgoing client messages in \texttt{client\_buf} during failover, and sends a \texttt{RECONNECT} handshake to the new primary once it comes up.
 A known weakness is that the proxy is itself a single point of failure: a crash severs all client connections even if the server cluster is healthy.
-This is a deliberate trade-off — unlike the primary, the proxy holds no game state, so a crash does not lose match data — but eliminating it would require either replicating the proxy or embedding reconnection logic in the client.
+This is a deliberate trade-off --- unlike the primary, the proxy holds no game state, so a crash does not lose match data --- and its impact is bounded: I also implemented a client-side retry loop that re-establishes the connection every two seconds and replays the \texttt{RECONNECT} handshake, so a restarted proxy restores each player's session instead of forcing a fresh join.
+It does not preserve a match in progress, since the primary observes the disconnections and resolves the victory condition immediately; bounding that would require a server-side grace period, while removing the dependency altogether would require replicating the proxy behind a virtual address.
 
 On the client side, I built the entire Pygame application: the MVC structure (\texttt{GameController}, \texttt{GameState}, views for lobby, game, and victory), the \texttt{NetworkManager} (TCP connection, line-delimited JSON framing, background receive thread), and all graphical rendering.
 I also wrote the bulk of the automated test suite: \texttt{test\_core.py},
@@ -901,9 +892,14 @@ Finally I removed around 350 lines of dead code, which exposed a latent
 I fixed it and added the missing regression test.
 
 The main weakness in my part is that reconnection is narrower than it could be: a
-client that drops voluntarily cannot rejoin, because the \texttt{RECONNECT}
-handshake is exercised only by the proxy during failover. Generalising it would
-require a per-player grace timer driven by the game loop.
+client whose process exits cannot rejoin, because the \texttt{session\_id} lives
+only in the client's memory and there is no server-side grace timer bounding how
+long a disconnected player is retained. A transient socket drop is recovered while
+enough players remain alive, but \texttt{handle\_player\_disconnect} evaluates the
+victory condition immediately, so in a two-player match a single drop already ends
+the round. Generalising this would require persisting the session identifier
+client-side and driving an explicit expiry timer from the game loop, so that a
+brief absence suspends the victory check instead of resolving it.
 
 % -----------------------------------------------------------------------
 \section{Future Works}\label{future-works}
@@ -911,7 +907,13 @@ require a per-player grace timer driven by the game loop.
 
 \begin{itemize}
     \item \textbf{Async I/O}: replace the thread-per-client model with \texttt{asyncio} to improve scalability.
-    \item \textbf{Proxy fault tolerance}: introduce a client-side reconnect mechanism or a replicated proxy to eliminate the current single point of failure at the proxy layer.
+    \item \textbf{Proxy fault tolerance}: the client-side reconnect loop already bounds
+    the impact of a proxy restart, but the proxy address is statically configured, so
+    the permanent loss of its host still takes the system down. Replicating the proxy
+    behind a virtual address would remove that dependency.
+    \item \textbf{Disconnection grace period}: suspend the victory check for a short
+    window after a player disconnects, so that a transport failure --- a proxy restart
+    in particular --- does not decide a match that the players could otherwise resume.
     \item \textbf{Persistent state}: write state snapshots to disk so that a complete cluster restart can recover the last known game state.
     \item Add collectable power-ups (increased bomb range, extra bomb, speed boost) to enrich gameplay.
     \item Support multiple simultaneous game rooms on the same server cluster.
