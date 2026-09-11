@@ -256,7 +256,7 @@ The following alternatives were discarded in favour of the chosen design:
 \subsection{Infrastructure}\label{infrastructure}
 
 \paragraph{Infrastructural components.}
-Three process types are required to run the system; all can run on the same machine or on separate machines on the same LAN:
+Three process types are required to run the system. The client can run on a separate machine from the proxy and server cluster, which must currently be co-located: the proxy's backend address and the primary's replication target are hardcoded to \texttt{localhost}, so the proxy and the server cluster cannot yet be split across machines.
 
 \begin{itemize}
     \item \textbf{Server cluster} ($1 + 1$ instances): one active \emph{primary} server (port~5556) and one \emph{backup} server, which listens on port 5557 for incoming state snapshots (\texttt{BACKUP\_STATE\_PORT}) and, on promotion, re-opens the game socket on the primary's own port 5556, so that the proxy finds the new primary at the fixed backend address it already uses. Only the primary hosts the live \texttt{GameService} and accepts client connections; the backup runs in passive monitoring mode, receiving periodic state snapshots and waiting to be promoted. The primary automatically spawns the backup at startup via the \texttt{AutoSpawner} component; each newly promoted backup spawns a new one, maintaining fault tolerance continuously.
@@ -284,7 +284,7 @@ This is a deliberate design choice justified by the deployment scenario:
 The key domain entities are:
 \begin{itemize}
     \item \textbf{Player}: position $(x, y)$, name, lives, alive/disconnected status, reconnect session ID.
-    \item \textbf{Spectator}: name, join time, connected status.
+    \item \textbf{Spectator}: name, join time, connected status, reconnect session ID.
     \item \textbf{Bomb}: position, countdown timer, owner player ID.
     \item \textbf{Explosion}: set of affected tiles, remaining display ticks.
     \item \textbf{State}: the complete, versioned snapshot of the game -- game phase (\texttt{lobby / playing / victory}), map, all players, spectators, bombs, explosions, chat messages, winner.
@@ -346,7 +346,7 @@ Distributed Bomberman uses a \textbf{pure client-server} interaction model: all 
 
 This choice was deliberate:
 \begin{itemize}
-    \item \textbf{Consistency}: a single serialisation point (the server game loop) eliminates the possibility of concurrent writes and distributed state divergence.
+    \item \textbf{Consistency}: a single serialisation point (\texttt{GameService}'s \texttt{RLock}) eliminates the possibility of concurrent writes and distributed state divergence.
     \item \textbf{Simplicity}: clients have no peer-discovery logic, no direct connections to other clients, and no need to synchronise local replicas.
     \item \textbf{Fault tolerance}: the proxy-mediated model makes failover transparent; clients never know which physical server they are talking to.
 \end{itemize}
@@ -704,7 +704,7 @@ Manual end-to-end testing was performed to validate the fault-tolerance behaviou
 \begin{enumerate}
     \item Start server, proxy, and two clients as described in the Deployment section.
     \item Start a match; verify real-time state synchronisation across clients.
-    \item Identify the primary server PID via \texttt{netstat -ano | findstr 5556} (Windows) or \texttt{ss -tlnp | grep 5556} (Linux/macOS).
+    \item Identify the primary server PID via \texttt{netstat -ano | findstr 5556 | findstr LISTENING} (Windows) or \texttt{ss -tlnp | grep 5556} (Linux/macOS).
     \item Kill the primary with \texttt{taskkill /PID \{pid\} /F} (Windows) or \texttt{kill \{pid\}} (Linux/macOS).
     \item Observe: the backup promotes itself (new PID appears on port 5556), clients remain connected, and the match continues without returning to the lobby.
     \item Repeat the kill on the newly promoted primary to verify that a second failover completes correctly.
@@ -910,23 +910,10 @@ brief absence suspends the victory check instead of resolving it.
 % -----------------------------------------------------------------------
 
 \begin{itemize}
-    \item \textbf{Async I/O}: replace the thread-per-client model with \texttt{asyncio} to improve scalability.
-    \item \textbf{Proxy fault tolerance}: the client-side reconnect loop already bounds
-    the impact of a proxy restart, but the proxy address is statically configured, so
-    the permanent loss of its host still takes the system down. Replicating the proxy
-    behind a virtual address would remove that dependency.
-    \item \textbf{Disconnection grace period}: suspend the victory check for a short
-    window after a player disconnects, so that a transport failure --- a proxy restart
-    in particular --- does not decide a match that the players could otherwise resume.
-    \item \textbf{Persistent state}: write state snapshots to disk so that a complete cluster restart can recover the last known game state.
     \item Add collectable power-ups (increased bomb range, extra bomb, speed boost) to enrich gameplay.
     \item Support multiple simultaneous game rooms on the same server cluster.
     \item \textbf{Authentication}: add a simple username/password login to allow persistent scores across sessions.
     \item Automate the failover acceptance test using subprocess management and virtual network interfaces, removing the current need for manual steps.
-    \item \textbf{Process lifecycle}: the backup is spawned as a child process but
-    is not reaped when the primary terminates abnormally, so orphaned backups can
-    survive and keep their ports bound. Placing the cluster in a process group, or
-    supervising it with a dedicated launcher, would make shutdown deterministic.
 \end{itemize}
 
 \end{document}
