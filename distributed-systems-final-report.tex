@@ -145,7 +145,7 @@ Distribution is the core design driver:
     \item[\textbf{F4}] The first player to join shall become the host and shall be able to start the game.
     \item[\textbf{F5}] Players shall be able to move on the grid and place bombs; bombs shall explode after a timer, destroying breakable blocks and damaging players in range.
     \item[\textbf{F6}] A player who disconnects during a match shall be marked as disconnected and excluded from the active game; their session can be restored under the original identity --- by the proxy after a server failover, or by the client itself once it re-establishes a dropped connection.
-    \item[\textbf{F7}] Players shall be able to send chat messages visible to all participants.
+    \item[\textbf{F7}] Players and spectators shall be able to send chat messages visible to all participants.
     \item[\textbf{F8}] The system shall declare a winner (or a draw) and return all players to the lobby automatically.
 \end{enumerate}
 
@@ -174,7 +174,7 @@ This is a limited form of failover transparency: it works well for short outages
 
 \paragraph{Consistency.}
 The authoritative server pattern provides a simple consistency model: only the server mutates game state, and clients are pure renderers.
-All client inputs are serialised through the server's game loop under a single \texttt{RLock}, so there are no concurrent write conflicts.
+All client inputs are serialised through \texttt{GameService}'s single \texttt{RLock}, so there are no concurrent write conflicts.
 One limitation worth noting is that the backup may hold a snapshot up to 100\,ms old at the time of failover, meaning a small amount of recent game state could be lost in a crash.
 
 \paragraph{Performance and concurrency.}
