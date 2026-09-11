@@ -849,14 +849,13 @@ The transparency layer is the TCP proxy (\texttt{fault\_tolerance/proxy\_server.
 The proxy intercepts the server's \texttt{join\_success} message to extract the \texttt{session\_id}, buffers outgoing client messages in \texttt{client\_buf} during failover, and sends a \texttt{RECONNECT} handshake to the new primary once it comes up.
 A known weakness is that the proxy is itself a single point of failure: a crash severs all client connections even if the server cluster is healthy.
 This is a deliberate trade-off --- unlike the primary, the proxy holds no game state, so a crash does not lose match data --- and its impact is bounded: I also implemented a client-side retry loop that re-establishes the connection every two seconds and replays the \texttt{RECONNECT} handshake, so a restarted proxy restores each player's session instead of forcing a fresh join.
-It does not preserve a match in progress, since the primary observes the disconnections and resolves the victory condition immediately; bounding that would require a server-side grace period, while removing the dependency altogether would require replicating the proxy behind a virtual address.
+It does not preserve a match in progress, for the reasons discussed in \cref{availability}.
 
 On the client side, I built the entire Pygame application: the MVC structure (\texttt{GameController}, \texttt{GameState}, views for lobby, game, and victory), the \texttt{NetworkManager} (TCP connection, line-delimited JSON framing, background receive thread), and all graphical rendering.
 I also wrote the bulk of the automated test suite: \texttt{test\_core.py},
 \texttt{test\_game.py} (31 tests), \texttt{test\_controller.py} (28 tests), and
 \texttt{test\_game\_service.py} (19 tests).
-A limitation of the current replication design is that the primary opens a new TCP connection for every snapshot (every 100\,ms), rather than maintaining a persistent replication channel.
-This is functional at the current scale but would be worth revisiting if the replication interval were reduced or the state size increased significantly.
+A limitation of the current replication design, discussed in \cref{interaction}, is opening a new TCP connection for every snapshot rather than maintaining a persistent channel --- functional at the current scale, but worth revisiting if the replication interval were reduced or the state size increased significantly.
 
 \subsection{Gioele Santi}
 
